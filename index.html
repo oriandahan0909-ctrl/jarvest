@@ -672,6 +672,42 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible{
   <div class="sheet-body" id="whatifBody"></div>
 </div>
 
+<!-- ============== SHEET: BUCKET DETAIL ============== -->
+<div class="sheet" id="sheetBucket">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h2 id="sheetBucketTitle">Bucket</h2>
+    <button class="sheet-close" data-close="sheetBucket"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div class="sheet-body" id="bucketBody"></div>
+</div>
+
+<!-- ============== SHEET: EDIT SHIFT ============== -->
+<div class="sheet" id="sheetEditShift">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h2 id="sheetEditShiftTitle">Edit entry</h2>
+    <button class="sheet-close" data-close="sheetEditShift"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div class="sheet-body" id="editShiftBody"></div>
+</div>
+
+<!-- ============== SHEET: MOVE MONEY ============== -->
+<div class="sheet" id="sheetMove">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h2 id="sheetMoveTitle">Move money</h2>
+    <button class="sheet-close" data-close="sheetMove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div class="sheet-body" id="moveBody"></div>
+</div>
+
+<!-- ============== SHEET: ALLOCATION STUDIO ============== -->
+<div class="sheet" id="sheetAlloc">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h2>Allocation studio</h2>
+    <button class="sheet-close" data-close="sheetAlloc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div class="sheet-body" id="allocBody"></div>
+</div>
+
 <!-- ============== SHEET: GENERIC INFO ============== -->
 <div class="sheet" id="sheetInfo">
   <div class="sheet-handle"></div>
@@ -699,6 +735,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible{
    ===================================================================== */
 
 const STORE_KEY = 'jarvest_v1';
+const APP_VERSION = '2.0.0';
 const GOAL_COLORS = ['#E8A33D','#4FBF9F','#8B85E0','#E2604F','#F2B857','#5FA8D3'];
 const GOAL_ICONS = ['🛟','💻','✈️','🎸','🍵','🏠','🚗','🎓','💍','🩺','🐾','🎮','📷','👶','🏝️','🎁','🍹','⛽','🧾','🌧️'];
 const CURRENCIES = ['$','€','£','₪'];
@@ -761,6 +798,7 @@ function round2(n){ return Math.round((n + Number.EPSILON) * 100) / 100; }
 function fmtMoney(n, opts){
   opts = opts || {};
   const sym = (state && state.profile && state.profile.currency) || '$';
+  if(state && state.settings && state.settings.privacy && !opts.reveal) return sym+'•••';
   const sign = n < 0 ? '-' : '';
   const v = Math.abs(n || 0);
   const decimals = opts.whole ? 0 : 2;
@@ -851,12 +889,38 @@ function freshState(){
     profile: { name:'', projectName:'My Savings Plan', avatar:'⚡', currency:'$', defaultRate:20 },
     goals: [],
     shifts: [],
+    movements: [],
     settings: {
       roundUp: { enabled:true, goalId:null },
       payFrequency:'shift', occupation:null, incomeRange:null, referralSource:null,
+      monthlyGoal:0, privacy:false, tourSeen:false,
       onboarded:false
     }
   };
+}
+
+/* =====================================================================
+   BALANCE LEDGER
+   Bucket balances are derived from recorded events (shift allocations +
+   withdrawals/transfers) rather than incremented in place. That's what
+   makes editing or deleting a past shift correct instead of leaving
+   balances silently drifted.
+   ===================================================================== */
+function recomputeBalances(){
+  const map = new Map(state.goals.map(g=>[g.id, 0]));
+  state.shifts.forEach(s=>{
+    (s.allocations||[]).forEach(a=>{
+      if(map.has(a.goalId)) map.set(a.goalId, map.get(a.goalId) + a.amount);
+    });
+  });
+  (state.movements||[]).forEach(m=>{
+    if(m.type==='withdraw' && map.has(m.goalId)) map.set(m.goalId, map.get(m.goalId) - m.amount);
+    if(m.type==='transfer'){
+      if(map.has(m.goalId))   map.set(m.goalId,   map.get(m.goalId)   - m.amount);
+      if(map.has(m.toGoalId)) map.set(m.toGoalId, map.get(m.toGoalId) + m.amount);
+    }
+  });
+  state.goals.forEach(g=> g.current = round2(map.get(g.id) || 0));
 }
 
 /* =====================================================================
@@ -1044,42 +1108,97 @@ function applyRoundUp(amount, result, goals){
 /* Commits a shift: runs the engine, writes goal.current increments,
    stores the shift + its receipt, and (unless silent, used only for
    seeding) surfaces toast/celebration/haptics for freshly-completed goals. */
-function commitShift({amount, hours, rate, tips, note, dateISO, silent}){
+function commitShift({amount, hours, rate, tips, note, tag, dateISO, silent}){
   amount = round2(amount);
   const before = new Map(state.goals.map(g=>[g.id, g.current]));
   let result = computeAllocation(amount, state.goals);
   result = applyRoundUp(amount, result, state.goals);
 
-  result.allocations.forEach(a=>{
-    const g = state.goals.find(x=>x.id===a.goalId);
-    if(g) g.current = round2(g.current + a.amount);
-  });
-
   const shift = {
     id: uid(), dateISO: dateISO || new Date().toISOString(),
     amount, hours: hours||null, rate: rate||null, tips: tips||0,
-    note: note||'', allocations: result.allocations, unallocated: result.unallocated,
+    note: note||'', tag: tag||'', allocations: result.allocations, unallocated: result.unallocated,
     createdAt: Date.now()
   };
   state.shifts.push(shift);
-  // Two shifts logged for the same day carry the same dateISO, so date
-  // alone leaves ties in arbitrary order — break them by entry time so
-  // "last shift" is always the one most recently entered.
-  state.shifts.sort((a,b)=>
-    (new Date(b.dateISO) - new Date(a.dateISO)) || ((b.createdAt||0) - (a.createdAt||0))
-  );
+  sortShifts();
+  recomputeBalances();
 
   const newlyCompleted = state.goals.filter(g=>
     isGoalComplete(g) && before.has(g.id) && before.get(g.id) < g.target - 0.005
   );
+  const milestone = !newlyCompleted.length ? findMilestoneCrossing(before) : null;
   saveState();
 
   if(!silent){
     toast(unitWord(true)+' logged · '+fmtMoney(amount)+' sorted');
     haptic('success');
     if(newlyCompleted.length>0) setTimeout(()=> celebrateGoal(newlyCompleted[0]), 450);
+    else if(milestone) setTimeout(()=> toast(`${milestone.g.icon} ${milestone.g.title} just passed ${milestone.pct}%`), 700);
   }
   return shift;
+}
+
+function sortShifts(){
+  // Two shifts logged for the same day carry the same dateISO, so date
+  // alone leaves ties in arbitrary order — break them by entry time so
+  // "last shift" is always the one most recently entered.
+  state.shifts.sort((a,b)=>
+    (new Date(b.dateISO) - new Date(a.dateISO)) || ((b.createdAt||0) - (a.createdAt||0))
+  );
+}
+
+// smaller wins deserve a nod too, not just hitting 100%
+function findMilestoneCrossing(before){
+  const marks = [75,50,25];
+  for(const g of state.goals){
+    if(!g.target || !before.has(g.id)) continue;
+    const pctBefore = (before.get(g.id)/g.target)*100;
+    const pctNow = (g.current/g.target)*100;
+    for(const m of marks){
+      if(pctBefore < m && pctNow >= m) return { g, pct:m };
+    }
+  }
+  return null;
+}
+
+/* ---------- editing / removing recorded events ---------- */
+function deleteShift(id){
+  state.shifts = state.shifts.filter(s=>s.id!==id);
+  recomputeBalances();
+  saveState();
+}
+function updateShift(id, patch){
+  const s = state.shifts.find(x=>x.id===id);
+  if(!s) return null;
+  Object.assign(s, patch);
+  if(patch.amount != null){
+    // re-split the edited amount with today's bucket setup
+    const others = state.shifts.filter(x=>x.id!==id);
+    const snapshot = state.shifts;
+    state.shifts = others;
+    recomputeBalances();
+    let result = computeAllocation(s.amount, state.goals);
+    result = applyRoundUp(s.amount, result, state.goals);
+    s.allocations = result.allocations;
+    s.unallocated = result.unallocated;
+    state.shifts = snapshot;
+  }
+  sortShifts();
+  recomputeBalances();
+  saveState();
+  return s;
+}
+function addMovement(m){
+  if(!state.movements) state.movements = [];
+  state.movements.push(Object.assign({ id:uid(), dateISO:new Date().toISOString(), createdAt:Date.now() }, m));
+  recomputeBalances();
+  saveState();
+}
+function deleteMovement(id){
+  state.movements = (state.movements||[]).filter(m=>m.id!==id);
+  recomputeBalances();
+  saveState();
 }
 
 /* ---------- celebration ---------- */
@@ -1143,12 +1262,95 @@ function jarSvg(pct, color, opts){
 /* ===================== DERIVED DATA HELPERS ===================== */
 function totalEarned(){ return round2(state.shifts.reduce((s,x)=>s+x.amount,0)); }
 function totalStashed(){ return round2(state.goals.reduce((s,g)=>s+g.current,0)); }
-function freeCash(){ return round2(totalEarned() - totalStashed()); }
+function totalSpent(){ return round2((state.movements||[]).filter(m=>m.type==='withdraw').reduce((s,m)=>s+m.amount,0)); }
+// money that came in from work but was never assigned to a bucket.
+// Invariant: totalEarned === totalStashed + freeCash + totalSpent
+function freeCash(){ return round2(state.shifts.reduce((s,x)=>s+(x.unallocated||0),0)); }
+
 function shiftsInRange(days){
   const cutoff = Date.now() - days*86400000;
   return state.shifts.filter(s=> new Date(s.dateISO).getTime() >= cutoff);
 }
-function activeGoals(){ return state.goals.filter(g=>!g.archived); }
+function activeGoals(){
+  const g = state.goals.filter(x=>!x.archived);
+  return g.slice().sort((a,b)=> ((a.order??a.createdAt) - (b.order??b.createdAt)));
+}
+function archivedGoals(){ return state.goals.filter(g=>g.archived); }
+
+/* ---- monthly income goal ---- */
+function monthToDateEarned(){
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  return round2(state.shifts.filter(s=> new Date(s.dateISO).getTime() >= start).reduce((a,s)=>a+s.amount,0));
+}
+
+/* ---- pacing: is this bucket on track for its target date? ---- */
+function goalPace(g){
+  if(!g.target || !g.targetDate || isGoalComplete(g)) return null;
+  const days = daysBetween(startOfDay(new Date()), startOfDay(new Date(g.targetDate)));
+  const remaining = goalRoom(g);
+  if(days <= 0) return { overdue:true, remaining, perWeek:remaining, days:0, onTrack:false };
+  const perWeek = round2(remaining / (days/7));
+  // what this bucket has actually been receiving per week lately
+  const recent = shiftsInRange(28);
+  const got = recent.reduce((s,sh)=> s + ((sh.allocations||[]).find(a=>a.goalId===g.id)?.amount || 0), 0);
+  const actualPerWeek = round2(got/4);
+  return { overdue:false, remaining, perWeek, actualPerWeek, days, onTrack: actualPerWeek >= perWeek - 0.005 };
+}
+
+/* ---- day-of-week performance ---- */
+function dayOfWeekStats(){
+  const buckets = Array.from({length:7}, ()=>({total:0, count:0}));
+  state.shifts.forEach(s=>{
+    const d = new Date(s.dateISO).getDay();
+    buckets[d].total += s.amount; buckets[d].count++;
+  });
+  return buckets.map((b,i)=>({
+    day:i, total:round2(b.total), count:b.count,
+    avg: b.count ? round2(b.total/b.count) : 0
+  }));
+}
+function bestDayOfWeek(){
+  const stats = dayOfWeekStats().filter(d=>d.count>=2);
+  if(!stats.length) return null;
+  return stats.reduce((best,d)=> d.avg>best.avg ? d : best, stats[0]);
+}
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+/* ---- per-employer / per-tag breakdown ---- */
+function tagStats(){
+  const map = new Map();
+  state.shifts.forEach(s=>{
+    const t = (s.tag||'').trim();
+    if(!t) return;
+    if(!map.has(t)) map.set(t,{tag:t,total:0,count:0,hours:0});
+    const e = map.get(t);
+    e.total += s.amount; e.count++; e.hours += (s.hours||0);
+  });
+  return [...map.values()].map(e=>({
+    ...e, total:round2(e.total), hours:round2(e.hours),
+    avg: e.count?round2(e.total/e.count):0,
+    perHour: e.hours>0 ? round2(e.total/e.hours) : null
+  })).sort((a,b)=>b.total-a.total);
+}
+function knownTags(){ return [...new Set(state.shifts.map(s=>(s.tag||'').trim()).filter(Boolean))]; }
+
+/* ---- cumulative stashed over time ---- */
+function cumulativeSeries(points){
+  points = points || 12;
+  const now = startOfDay(new Date());
+  const sorted = [...state.shifts].sort((a,b)=> new Date(a.dateISO)-new Date(b.dateISO));
+  if(!sorted.length) return [];
+  const firstT = Math.min(new Date(sorted[0].dateISO).getTime(), now.getTime()-6*86400000);
+  const span = Math.max(1, now.getTime()+86400000 - firstT);
+  const out = [];
+  for(let i=1;i<=points;i++){
+    const cutoff = firstT + span*(i/points);
+    const total = sorted.filter(s=> new Date(s.dateISO).getTime() <= cutoff).reduce((a,s)=>a+s.amount,0);
+    out.push({ label: new Date(cutoff).toLocaleDateString(undefined,{month:'short',day:'numeric'}), total: round2(total) });
+  }
+  return out;
+}
 
 /* ===================== HOME ===================== */
 function renderHome(){
@@ -1189,16 +1391,31 @@ function renderHome(){
   }
 
   const recent = state.shifts.slice(0,8).map(s=>{
-    const sub = s.hours ? `${s.hours}h · ${fmtMoney(s.rate)}/hr${s.tips?' · '+fmtMoney(s.tips)+' tips':''}` : (s.note || 'Manual entry');
-    return `<div class="activity-row" data-action="viewShift" data-id="${s.id}">
+    const sub = s.hours ? `${s.hours}h · ${fmtMoney(s.rate)}/hr${s.tips?' · '+fmtMoney(s.tips)+' tips':''}` : (s.note || s.tag || 'Manual entry');
+    return `<div class="activity-row" data-action="editShift" data-id="${s.id}">
       <div class="activity-icon">💰</div>
       <div class="activity-main">
-        <div class="activity-title">${fmtDate(s.dateISO,{weekday:true})}</div>
+        <div class="activity-title">${fmtDate(s.dateISO,{weekday:true})}${s.tag?` <span style="color:var(--text-faint);font-weight:400;">· ${escapeHtml(s.tag)}</span>`:''}</div>
         <div class="activity-sub">${escapeHtml(sub)}</div>
       </div>
       <div class="activity-amt num">+${fmtMoney(s.amount)}</div>
     </div>`;
   }).join('') || `<div class="empty-state"><p>Nothing logged yet.</p></div>`;
+
+  const mg = state.settings.monthlyGoal || 0;
+  const mtd = monthToDateEarned();
+  const mgPct = mg>0 ? clamp((mtd/mg)*100,0,100) : 0;
+  const monthlyHtml = mg>0 ? `
+    <div class="card" style="margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;">
+        <span style="font-size:12.5px;color:var(--text-faint);">This month</span>
+        <span class="num" style="font-size:13px;">${fmtMoney(mtd)} <span style="color:var(--text-faint)">/ ${fmtMoney(mg)}</span></span>
+      </div>
+      <div style="height:9px;border-radius:100px;background:var(--surface-3);overflow:hidden;">
+        <div style="width:${mgPct}%;height:100%;background:linear-gradient(90deg,var(--amber),var(--amber-2));transition:width .6s var(--ease-spring);"></div>
+      </div>
+      <div style="font-size:11.5px;color:var(--text-faint);margin-top:7px;">${mtd>=mg?'🎉 Monthly target reached':`${fmtMoney(mg-mtd)} to go`}</div>
+    </div>` : '';
 
   el.innerHTML = `
     <div class="topbar">
@@ -1207,7 +1424,10 @@ function renderHome(){
         <span class="greet-name">${escapeHtml(p.name || 'there')}</span>
         ${p.projectName ? `<span class="greet-project">${escapeHtml(p.projectName)}</span>` : ''}
       </div>
-      <div class="avatar">${p.avatar || '🙂'}</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="avatar" style="width:38px;height:38px;font-size:15px;" data-action="togglePrivacy" title="Hide amounts">${state.settings.privacy?'🙈':'👁️'}</button>
+        <div class="avatar">${p.avatar || '🙂'}</div>
+      </div>
     </div>
 
     <div class="balance-hero">
@@ -1229,7 +1449,12 @@ function renderHome(){
           <span class="fab-log-sub">${state.settings.payFrequency==='payday' ? 'Enter the total, or hours × rate' : 'Enter a total, or hours × rate'}</span>
         </span>
       </button>
+      ${state.shifts.length ? `<div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="quickLog">↻ Same as last</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="undoLast">↶ Undo last</button>
+      </div>` : ''}
     </div>
+    ${monthlyHtml}
 
     <div class="section-title">Where it went</div>
     ${pourHtml}
@@ -1263,7 +1488,7 @@ function renderBuckets(){
     const complete = isGoalComplete(g);
     const pctFill = g.target ? clamp((g.current/g.target)*100,0,100) : 60;
     const subLine = g.target ? `${fmtMoney(g.current)} of ${fmtMoney(g.target)}` : `${fmtMoney(g.current)} saved`;
-    return `<div class="jar-card ${complete?'jar-card-complete':''}" data-action="openGoal" data-id="${g.id}">
+    return `<div class="jar-card ${complete?'jar-card-complete':''}" data-action="openBucket" data-id="${g.id}">
       ${g.locked ? `<div class="jar-lock-badge" title="Priority"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>` : ''}
       ${jarSvg(pctFill, g.color, {w:64,h:84})}
       <div class="jar-card-title">${g.icon} ${escapeHtml(g.title)}</div>
@@ -1292,7 +1517,9 @@ function renderBuckets(){
         <span>Allocated</span><span class="num">${totalPct}% · ${100-totalPct}% free</span>
       </div>
       <div style="display:flex;height:10px;border-radius:100px;overflow:hidden;background:var(--surface-3);">${bar}</div>
+      <button class="btn btn-secondary btn-sm btn-block" style="margin-top:14px;" data-action="openAlloc">Tune all allocations</button>
     </div>
+    ${totalSpent()>0 ? `<div class="field-hint" style="margin-top:10px;text-align:center;">${fmtMoney(totalStashed())} saved · ${fmtMoney(totalSpent())} spent from buckets</div>` : ''}
 
     <div class="buckets-grid" style="margin-top:18px;">
       ${cards}
@@ -1302,6 +1529,16 @@ function renderBuckets(){
       </button>
     </div>
     ${suggestHtml}
+    ${archivedGoals().length ? `
+      <div class="section-title">Archived</div>
+      <div class="card">
+        ${archivedGoals().map(g=>`<div class="activity-row" data-action="openBucket" data-id="${g.id}">
+          <div class="activity-icon" style="background:var(--surface-2);">${g.icon}</div>
+          <div class="activity-main"><div class="activity-title">${escapeHtml(g.title)}</div>
+            <div class="activity-sub">archived · no longer takes a share</div></div>
+          <div class="activity-amt num" style="color:var(--text-dim)">${fmtMoney(g.current)}</div>
+        </div>`).join('')}
+      </div>` : ''}
   `;
 }
 
@@ -1538,6 +1775,53 @@ function renderInsights(){
     : `<div class="empty-state"><p>Log a few shifts to unlock projections for your buckets.</p></div>`;
 
   const streak = currentStreak();
+
+  // cumulative earnings line (rendered as an SVG polyline)
+  const cumul = cumulativeSeries(12);
+  let cumulHtml = '';
+  if(cumul.length>1){
+    const maxC = Math.max(1, ...cumul.map(c=>c.total));
+    const w=300, h=110, pad=6;
+    const pts = cumul.map((c,i)=>{
+      const x = pad + (w-pad*2)*(i/(cumul.length-1));
+      const y = h - pad - (h-pad*2)*(c.total/maxC);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const areaPts = `${pad},${h-pad} ${pts} ${w-pad},${h-pad}`;
+    cumulHtml = `
+      <div class="section-title">Total earned over time</div>
+      <div class="card">
+        <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block;">
+          <polygon points="${areaPts}" fill="rgba(232,163,61,.14)"/>
+          <polyline points="${pts}" fill="none" stroke="var(--amber)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-faint);margin-top:4px;">
+          <span>${cumul[0].label}</span><span class="num">${fmtMoney(cumul[cumul.length-1].total)}</span>
+        </div>
+      </div>`;
+  }
+
+  const bd = bestDayOfWeek();
+  const bestDayHtml = bd ? `
+    <div class="section-title">Your best day</div>
+    <div class="proj-card">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+      <div class="proj-text"><b>${DAY_NAMES[bd.day]}s</b> are your strongest — averaging <b>${fmtMoney(bd.avg)}</b> across ${bd.count} ${bd.count===1?unitWord():unitWordPlural()}.</div>
+    </div>` : '';
+
+  const tags = tagStats();
+  const tagHtml = tags.length ? `
+    <div class="section-title">By employer</div>
+    <div class="card">
+      ${tags.map(t=>`<div class="activity-row">
+        <div class="activity-icon" style="background:var(--violet-soft);">🏷️</div>
+        <div class="activity-main">
+          <div class="activity-title">${escapeHtml(t.tag)}</div>
+          <div class="activity-sub">${t.count} ${t.count===1?unitWord():unitWordPlural()} · avg ${fmtMoney(t.avg)}${t.perHour?` · ${fmtMoney(t.perHour)}/hr`:''}</div>
+        </div>
+        <div class="activity-amt num">${fmtMoney(t.total)}</div>
+      </div>`).join('')}
+    </div>` : '';
   const badgesHtml = BADGE_DEFS.map(b=>{
     const earned = b.test();
     return `<div class="badge-chip ${earned?'':'locked'}"><div class="b-icon">${b.icon}</div><div class="b-label">${b.label()}</div></div>`;
@@ -1564,6 +1848,10 @@ function renderInsights(){
     <div class="section-title">Projections</div>
     ${projHtml}
     <button class="btn btn-secondary btn-block" data-action="openWhatif">Try the what-if simulator</button>
+
+    ${cumulHtml}
+    ${bestDayHtml}
+    ${tagHtml}
 
     <div class="section-title">Streak & badges</div>
     <div class="streak-card">
@@ -1702,16 +1990,30 @@ function renderSettings(){
 
     <div class="section-title">Data</div>
     <div class="card">
-      <button class="btn btn-secondary btn-block" data-action="exportCsv">Export ${unitWord()} history (CSV)</button>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Monthly income target <span style="text-transform:none;">(0 to hide)</span></label>
+        <input class="input num-input" id="monthlyGoalInput" type="number" inputmode="decimal" value="${state.settings.monthlyGoal||''}" placeholder="2000">
+        <button class="btn btn-secondary btn-sm btn-block" style="margin-top:9px;" data-action="saveMonthlyGoal">Save target</button>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text"><b>Privacy mode</b><span>Hide every amount behind dots</span></div>
+        <button class="switch ${state.settings.privacy?'on':''}" data-action="togglePrivacy"><div class="switch-knob"></div></button>
+      </div>
+      <button class="btn btn-secondary btn-block" style="margin-top:12px;" data-action="exportCsv">Export ${unitWord()} history (CSV)</button>
+      <button class="btn btn-secondary btn-block" style="margin-top:10px;" data-action="exportJson">Download full backup (JSON)</button>
+      <button class="btn btn-secondary btn-block" style="margin-top:10px;" data-action="importJson">Restore from backup</button>
+      <input type="file" id="importFile" accept="application/json,.json" style="display:none;">
       <button class="btn btn-danger btn-block" style="margin-top:10px;" data-action="resetData">Reset all data</button>
-      <div class="field-hint" style="margin-top:10px;">Everything lives only on this device — there's no account or server. Uninstalling or clearing Safari's site data will erase it, so export a CSV backup now and then.</div>
+      <div class="field-hint" style="margin-top:10px;">Everything lives only on this device — there's no account or server. The JSON backup is the one that can actually restore your data, so grab one now and then.</div>
     </div>
 
     <div class="section-title">About</div>
     <div class="card">
       <button class="btn btn-secondary btn-block" data-action="startTour">Take the guided tour</button>
+      <button class="btn btn-secondary btn-block" style="margin-top:10px;" data-action="checkUpdate">Check for updates</button>
       <button class="btn btn-ghost btn-block" style="margin-top:10px;" data-action="info" data-topic="allocation">How auto-allocation works</button>
       <button class="btn btn-ghost btn-block" data-action="info" data-topic="privacy">Privacy & data</button>
+      <div class="field-hint" style="text-align:center;margin-top:10px;">Jarvest v${APP_VERSION}</div>
     </div>
   `;
 }
@@ -1845,6 +2147,11 @@ function buildLogShiftBody(){
       <input class="input" id="lsDate" type="date" max="${todayInputValue()}" value="${todayInputValue()}">
     </div>
     <div class="field">
+      <label>Where / employer <span style="text-transform:none;">(optional)</span></label>
+      <input class="input" id="lsTag" list="lsTagList" placeholder="e.g. The Grill House">
+      <datalist id="lsTagList">${knownTags().map(t=>`<option value="${escapeHtml(t)}"></option>`).join('')}</datalist>
+    </div>
+    <div class="field">
       <label>Note <span style="text-transform:none;">(optional)</span></label>
       <input class="input" id="lsNote" placeholder="e.g. Saturday double">
     </div>
@@ -1918,7 +2225,7 @@ function submitLogShift(){
     rate = parseFloat(document.getElementById('lsRate').value)||0;
     tips = parseFloat(document.getElementById('lsTips').value)||0;
   }
-  commitShift({amount, hours, rate, tips, note, dateISO});
+  commitShift({amount, hours, rate, tips, note, tag:(document.getElementById('lsTag')||{}).value?.trim()||'', dateISO});
   closeSheet('sheetLogShift');
   renderActiveScreen();
   if(uiState.activeTab!=='home') { /* home will refresh next visit */ }
@@ -2005,6 +2312,26 @@ function wireStatic(){
       case 'resetData': resetAllData(); break;
       case 'useSuggestion': useSuggestion(actionEl.dataset.title, actionEl.dataset.icon, actionEl.dataset.color, parseFloat(actionEl.dataset.pct)); break;
       case 'dismissBanner': document.getElementById('envBanner').classList.remove('show'); break;
+      case 'openBucket': openBucketSheet(id); break;
+      case 'openMove': openMoveSheet(actionEl.dataset.mode, id); break;
+      case 'movePick':
+        uiState.moveTo = id;
+        document.querySelectorAll('#moveTargetList .list-select-opt').forEach(o=>o.classList.toggle('sel', o.dataset.id===id));
+        break;
+      case 'confirmMove': confirmMove(); break;
+      case 'toggleArchive': toggleArchive(id); break;
+      case 'editShift': openEditShift(id); break;
+      case 'saveEditShift': saveEditShift(); break;
+      case 'deleteShift': confirmDeleteShift(id); break;
+      case 'undoLast': undoLastShift(); break;
+      case 'openAlloc': openAllocSheet(); break;
+      case 'saveAlloc': saveAlloc(); break;
+      case 'togglePrivacy': togglePrivacy(); break;
+      case 'saveMonthlyGoal': saveMonthlyGoal(); break;
+      case 'exportJson': exportJson(); break;
+      case 'importJson': document.getElementById('importFile').click(); break;
+      case 'quickLog': quickLogSameAsLast(); break;
+      case 'checkUpdate': checkForUpdate(); break;
       case 'obPick': obPick(actionEl.dataset.field, actionEl.dataset.val); break;
       case 'obNext': obNext(); break;
       case 'obBack': obBack(); break;
@@ -2017,6 +2344,13 @@ function wireStatic(){
 
   document.addEventListener('input', function(e){
     if(e.target.id==='goalPctInput') updateGoalPctHint();
+  });
+
+  document.addEventListener('change', function(e){
+    if(e.target.id==='importFile'){
+      handleImportFile(e.target.files && e.target.files[0]);
+      e.target.value = '';
+    }
   });
 }
 
@@ -2294,19 +2628,394 @@ function endTour(){
   toast('Tour finished — explore anytime, or restart it from Settings');
 }
 
+/* =====================================================================
+   BUCKET DETAIL — per-bucket history, pacing, and money movement
+   ===================================================================== */
+function openBucketSheet(goalId){
+  const g = state.goals.find(x=>x.id===goalId);
+  if(!g) return;
+  uiState.bucketId = goalId;
+  document.getElementById('sheetBucketTitle').textContent = g.icon+' '+g.title;
+  renderBucketBody();
+  openSheet('sheetBucket');
+}
+function bucketHistory(goalId){
+  const rows = [];
+  state.shifts.forEach(s=>{
+    const a = (s.allocations||[]).find(x=>x.goalId===goalId);
+    if(a && a.amount>0.004) rows.push({ kind:'in', label:unitWord(true), dateISO:s.dateISO, amount:a.amount, id:s.id, note:s.note||s.tag||'' });
+  });
+  (state.movements||[]).forEach(m=>{
+    if(m.type==='withdraw' && m.goalId===goalId) rows.push({ kind:'out', label:'Spent', dateISO:m.dateISO, amount:-m.amount, id:m.id, note:m.note||'', movement:true });
+    if(m.type==='transfer' && m.goalId===goalId){
+      const to = state.goals.find(x=>x.id===m.toGoalId);
+      rows.push({ kind:'out', label:'To '+(to?to.title:'another bucket'), dateISO:m.dateISO, amount:-m.amount, id:m.id, note:'', movement:true });
+    }
+    if(m.type==='transfer' && m.toGoalId===goalId){
+      const from = state.goals.find(x=>x.id===m.goalId);
+      rows.push({ kind:'in', label:'From '+(from?from.title:'another bucket'), dateISO:m.dateISO, amount:m.amount, id:m.id, note:'', movement:true });
+    }
+  });
+  return rows.sort((a,b)=> new Date(b.dateISO)-new Date(a.dateISO));
+}
+function renderBucketBody(){
+  const g = state.goals.find(x=>x.id===uiState.bucketId);
+  if(!g) return;
+  const pct = g.target ? clamp((g.current/g.target)*100,0,100) : 0;
+  const pace = goalPace(g);
+  const hist = bucketHistory(g.id);
+
+  let paceHtml = '';
+  if(pace){
+    if(pace.overdue){
+      paceHtml = `<div class="proj-card" style="background:var(--coral-soft);border-color:rgba(226,96,79,.35);margin-bottom:14px;">
+        <div class="proj-text">Target date has passed with <b style="color:var(--coral)">${fmtMoney(pace.remaining)}</b> still to go. Adjust the date or the target when you get a chance.</div></div>`;
+    } else {
+      const ok = pace.onTrack;
+      paceHtml = `<div class="proj-card" style="${ok?'':'background:var(--amber-soft);border-color:rgba(232,163,61,.35);'}margin-bottom:14px;">
+        <div class="proj-text">${ok?'✅ On track':'⏳ Running behind'} — needs <b>${fmtMoney(pace.perWeek)}/week</b> to land by ${fmtDate(g.targetDate,{short:true})}. Lately it's getting <b>${fmtMoney(pace.actualPerWeek)}/week</b>.</div></div>`;
+    }
+  }
+
+  const histHtml = hist.length ? hist.slice(0,25).map(r=>`
+    <div class="activity-row">
+      <div class="activity-icon" style="background:${r.kind==='in'?'var(--teal-soft)':'var(--coral-soft)'}">${r.kind==='in'?'↓':'↑'}</div>
+      <div class="activity-main">
+        <div class="activity-title">${escapeHtml(r.label)}</div>
+        <div class="activity-sub">${fmtDate(r.dateISO,{short:true})}${r.note?' · '+escapeHtml(r.note):''}</div>
+      </div>
+      <div class="activity-amt num" style="color:${r.kind==='in'?'var(--teal)':'var(--coral)'}">${r.amount>0?'+':''}${fmtMoney(r.amount)}</div>
+    </div>`).join('') : `<div class="empty-state"><p>Nothing has flowed into this bucket yet.</p></div>`;
+
+  document.getElementById('bucketBody').innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+      ${jarSvg(pct, g.color, {w:70,h:92})}
+      <div style="flex:1;">
+        <div class="num" style="font-size:26px;">${fmtMoney(g.current)}</div>
+        <div style="font-size:12.5px;color:var(--text-faint);">${g.target?`of ${fmtMoney(g.target)} · ${Math.round(pct)}%`:'no target set'}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:6px;">${g.pct}% of every ${unitWord()}${g.locked?' · priority':''}</div>
+      </div>
+    </div>
+    ${paceHtml}
+    <div style="display:flex;gap:8px;margin-bottom:6px;">
+      <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="openMove" data-mode="withdraw" data-id="${g.id}">Spend from it</button>
+      <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="openMove" data-mode="transfer" data-id="${g.id}">Transfer</button>
+      <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="openGoal" data-id="${g.id}">Edit</button>
+    </div>
+    <div class="section-title">History</div>
+    <div class="card" style="margin-bottom:12px;">${histHtml}</div>
+    <button class="btn btn-ghost btn-block" data-action="toggleArchive" data-id="${g.id}">${g.archived?'Restore this bucket':'Archive this bucket'}</button>
+  `;
+}
+
+/* ---------- move money: withdraw or transfer ---------- */
+function openMoveSheet(mode, goalId){
+  uiState.moveMode = mode;
+  uiState.moveFrom = goalId;
+  const g = state.goals.find(x=>x.id===goalId);
+  if(!g) return;
+  document.getElementById('sheetMoveTitle').textContent = mode==='withdraw' ? 'Spend from '+g.title : 'Transfer out of '+g.title;
+  const others = activeGoals().filter(x=>x.id!==goalId);
+  document.getElementById('moveBody').innerHTML = `
+    <div class="field-hint" style="margin-bottom:14px;">Available in ${escapeHtml(g.title)}: <b class="num" style="color:var(--text)">${fmtMoney(g.current)}</b></div>
+    <div class="field">
+      <label>Amount</label>
+      <input class="input num-input" id="moveAmount" type="number" inputmode="decimal" placeholder="0.00">
+    </div>
+    ${mode==='transfer' ? `<div class="field">
+      <label>Into which bucket</label>
+      <div class="list-select" id="moveTargetList">
+        ${others.map((o,i)=>`<div class="list-select-opt ${i===0?'sel':''}" data-action="movePick" data-id="${o.id}"><span>${o.icon} ${escapeHtml(o.title)}</span><span class="num" style="color:var(--text-faint)">${fmtMoney(o.current)}</span></div>`).join('') || '<div class="empty-state"><p>You need a second bucket to transfer into.</p></div>'}
+      </div>
+    </div>` : `<div class="field">
+      <label>What for <span style="text-transform:none;">(optional)</span></label>
+      <input class="input" id="moveNote" placeholder="e.g. paid rent">
+    </div>`}
+    <div class="field-hint" id="moveHint"></div>
+    <button class="btn btn-primary btn-block" style="margin-top:8px;" data-action="confirmMove">${mode==='withdraw'?'Record spending':'Transfer'}</button>
+  `;
+  if(mode==='transfer' && others.length) uiState.moveTo = others[0].id;
+  openSheet('sheetMove');
+}
+function confirmMove(){
+  const g = state.goals.find(x=>x.id===uiState.moveFrom);
+  const amount = round2(parseFloat(document.getElementById('moveAmount').value)||0);
+  if(amount<=0){ toast('Enter an amount greater than zero'); return; }
+  if(amount > g.current + 0.005){ toast(`Only ${fmtMoney(g.current)} is in that bucket`); return; }
+  if(uiState.moveMode==='withdraw'){
+    const note = (document.getElementById('moveNote')||{}).value || '';
+    addMovement({ type:'withdraw', goalId:g.id, amount, note:note.trim() });
+    toast(`${fmtMoney(amount)} recorded as spent`);
+  } else {
+    if(!uiState.moveTo){ toast('Pick a bucket to transfer into'); return; }
+    addMovement({ type:'transfer', goalId:g.id, toGoalId:uiState.moveTo, amount });
+    const to = state.goals.find(x=>x.id===uiState.moveTo);
+    toast(`Moved ${fmtMoney(amount)} to ${to?to.title:'bucket'}`);
+  }
+  haptic('success');
+  closeSheet('sheetMove');
+  renderBucketBody();
+  renderActiveScreen();
+}
+function toggleArchive(id){
+  const g = state.goals.find(x=>x.id===id);
+  if(!g) return;
+  g.archived = !g.archived;
+  if(g.archived) g.pct = 0; // stop it drawing from future shifts
+  saveState();
+  toast(g.archived?'Bucket archived':'Bucket restored');
+  closeSheet('sheetBucket');
+  renderActiveScreen();
+}
+
+/* =====================================================================
+   SHIFT EDITOR — fix or remove a recorded entry
+   ===================================================================== */
+function openEditShift(id){
+  const s = state.shifts.find(x=>x.id===id);
+  if(!s) return;
+  uiState.editShiftId = id;
+  document.getElementById('sheetEditShiftTitle').textContent = 'Edit '+unitWord();
+  document.getElementById('editShiftBody').innerHTML = `
+    <div class="field"><label>Amount</label>
+      <input class="input num-input" id="esAmount" type="number" inputmode="decimal" value="${s.amount}"></div>
+    <div class="field"><label>Date</label>
+      <input class="input" id="esDate" type="date" max="${todayInputValue()}" value="${new Date(s.dateISO).toISOString().slice(0,10)}"></div>
+    <div class="field"><label>Where / employer <span style="text-transform:none;">(optional)</span></label>
+      <input class="input" id="esTag" list="tagList" value="${escapeHtml(s.tag||'')}" placeholder="e.g. The Grill House">
+      <datalist id="tagList">${knownTags().map(t=>`<option value="${escapeHtml(t)}"></option>`).join('')}</datalist></div>
+    <div class="field"><label>Note <span style="text-transform:none;">(optional)</span></label>
+      <input class="input" id="esNote" value="${escapeHtml(s.note||'')}"></div>
+    <div class="field-hint">Changing the amount re-splits it across your current buckets.</div>
+    <button class="btn btn-primary btn-block" style="margin-top:8px;" data-action="saveEditShift">Save changes</button>
+    <button class="btn btn-danger btn-block" style="margin-top:10px;" data-action="deleteShift" data-id="${s.id}">Delete this ${unitWord()}</button>
+  `;
+  openSheet('sheetEditShift');
+}
+function saveEditShift(){
+  const id = uiState.editShiftId;
+  const amount = round2(parseFloat(document.getElementById('esAmount').value)||0);
+  if(amount<=0){ toast('Enter an amount greater than zero'); return; }
+  const dateVal = document.getElementById('esDate').value || todayInputValue();
+  updateShift(id, {
+    amount,
+    dateISO: new Date(dateVal+'T12:00:00').toISOString(),
+    tag: document.getElementById('esTag').value.trim(),
+    note: document.getElementById('esNote').value.trim()
+  });
+  closeSheet('sheetEditShift');
+  toast('Entry updated');
+  haptic('success');
+  renderActiveScreen();
+}
+function confirmDeleteShift(id){
+  const s = state.shifts.find(x=>x.id===id);
+  if(!s) return;
+  if(!confirm(`Delete this ${unitWord()} of ${fmtMoney(s.amount,{reveal:true})}? Your bucket balances will be corrected automatically.`)) return;
+  deleteShift(id);
+  closeSheet('sheetEditShift');
+  closeSheet('sheetInfo');
+  toast('Entry deleted');
+  renderActiveScreen();
+}
+function undoLastShift(){
+  const s = state.shifts[0];
+  if(!s){ toast('Nothing to undo'); return; }
+  if(!confirm(`Undo the last ${unitWord()} (${fmtMoney(s.amount,{reveal:true})})?`)) return;
+  deleteShift(s.id);
+  toast('Last entry removed');
+  haptic('warn');
+  renderActiveScreen();
+}
+
+/* =====================================================================
+   ALLOCATION STUDIO — tune every bucket's % together, with a live total
+   so you can never accidentally allocate more than 100%.
+   ===================================================================== */
+function openAllocSheet(){
+  const goals = activeGoals();
+  if(!goals.length){ toast('Add a bucket first'); return; }
+  uiState.allocDraft = {};
+  goals.forEach(g=> uiState.allocDraft[g.id] = g.pct);
+  renderAllocBody();
+  openSheet('sheetAlloc');
+}
+function renderAllocBody(){
+  const goals = activeGoals();
+  const total = round2(goals.reduce((s,g)=> s + (uiState.allocDraft[g.id]||0), 0));
+  const over = total > 100;
+  document.getElementById('allocBody').innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px;">
+        <span style="color:var(--text-faint)">Allocated</span>
+        <b class="num" style="color:${over?'var(--coral)':'var(--teal)'}">${total}% ${over?'· over budget':`· ${round2(100-total)}% free`}</b>
+      </div>
+      <div style="display:flex;height:10px;border-radius:100px;overflow:hidden;background:var(--surface-3);">
+        ${goals.map(g=>`<div style="width:${Math.min(100,uiState.allocDraft[g.id]||0)}%;background:${g.color};height:100%;"></div>`).join('')}
+      </div>
+    </div>
+    ${goals.map(g=>`
+      <div class="whatif-row">
+        <div class="whatif-top">
+          <span>${g.icon} ${escapeHtml(g.title)}</span>
+          <b class="num" style="color:${g.color}">${uiState.allocDraft[g.id]||0}%</b>
+        </div>
+        <input type="range" min="0" max="100" step="1" value="${uiState.allocDraft[g.id]||0}" data-alloc-slider="${g.id}">
+      </div>`).join('')}
+    <button class="btn btn-primary btn-block" style="margin-top:6px;" data-action="saveAlloc" ${over?'disabled':''}>${over?'Reduce below 100% to save':'Save allocations'}</button>
+  `;
+  document.querySelectorAll('[data-alloc-slider]').forEach(sl=>{
+    sl.addEventListener('input', e=>{
+      uiState.allocDraft[e.target.dataset.allocSlider] = parseInt(e.target.value,10);
+      renderAllocBody();
+      const again = document.querySelector(`[data-alloc-slider="${e.target.dataset.allocSlider}"]`);
+      if(again) again.focus();
+    });
+  });
+}
+function saveAlloc(){
+  const goals = activeGoals();
+  const total = goals.reduce((s,g)=> s + (uiState.allocDraft[g.id]||0), 0);
+  if(total > 100){ toast('Total is over 100%'); return; }
+  goals.forEach(g=> g.pct = uiState.allocDraft[g.id]||0);
+  saveState();
+  closeSheet('sheetAlloc');
+  toast('Allocations saved');
+  haptic('success');
+  renderActiveScreen();
+}
+
+/* =====================================================================
+   SETTINGS-LEVEL FEATURES
+   ===================================================================== */
+function togglePrivacy(){
+  state.settings.privacy = !state.settings.privacy;
+  saveState();
+  toast(state.settings.privacy ? 'Amounts hidden' : 'Amounts visible');
+  renderActiveScreen();
+}
+function saveMonthlyGoal(){
+  const v = parseFloat(document.getElementById('monthlyGoalInput').value);
+  state.settings.monthlyGoal = isNaN(v) ? 0 : Math.max(0, v);
+  saveState();
+  toast(state.settings.monthlyGoal ? 'Monthly target set' : 'Monthly target cleared');
+  renderSettings();
+}
+
+/* Full backup: CSV is for reading elsewhere, JSON is for actually
+   restoring — it round-trips every bucket, entry and setting. */
+function exportJson(){
+  const payload = { app:'jarvest', version:APP_VERSION, exportedAt:new Date().toISOString(), state };
+  const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'jarvest-backup.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  toast('Backup ready to save');
+}
+function handleImportFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const parsed = JSON.parse(reader.result);
+      const incoming = parsed && parsed.state ? parsed.state : parsed;
+      if(!incoming || !Array.isArray(incoming.goals) || !Array.isArray(incoming.shifts)){
+        toast("That file doesn't look like a Jarvest backup"); return;
+      }
+      if(!confirm('Restore this backup? It replaces everything currently on this device.')) return;
+      state = incoming;
+      if(!state.movements) state.movements = [];
+      if(!state.settings) state.settings = freshState().settings;
+      migrateState();
+      recomputeBalances();
+      saveState();
+      toast('Backup restored');
+      switchTab('home');
+    }catch(e){
+      toast("Couldn't read that file");
+    }
+  };
+  reader.onerror = ()=> toast("Couldn't read that file");
+  reader.readAsText(file);
+}
+
+function quickLogSameAsLast(){
+  const last = state.shifts[0];
+  if(!last){ toast('Log one first, then this repeats it'); return; }
+  commitShift({
+    amount:last.amount, hours:last.hours, rate:last.rate, tips:last.tips,
+    note:last.note, tag:last.tag, dateISO:new Date().toISOString()
+  });
+  renderActiveScreen();
+}
+
+/* iOS caches installed web apps aggressively, so give people a way to
+   see which build they're on and pull a fresh one on demand. */
+function checkForUpdate(){
+  toast('Fetching the latest version…');
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.getRegistrations().then(rs=>{
+      rs.forEach(r=> r.update && r.update());
+    }).catch(()=>{});
+  }
+  if(window.caches && caches.keys){
+    caches.keys().then(keys=> Promise.all(keys.map(k=>caches.delete(k)))).catch(()=>{});
+  }
+  setTimeout(()=>{
+    const u = new URL(location.href);
+    u.searchParams.set('v', Date.now());
+    location.replace(u.toString());
+  }, 900);
+}
+
+/* Older saves predate features added later — fill in anything missing so
+   an existing install never lands on undefined fields. */
+function migrateState(){
+  const def = freshState();
+  if(!state.profile) state.profile = def.profile;
+  if(!state.settings) state.settings = def.settings;
+  if(!Array.isArray(state.goals)) state.goals = [];
+  if(!Array.isArray(state.shifts)) state.shifts = [];
+  if(!Array.isArray(state.movements)) state.movements = [];
+  Object.keys(def.settings).forEach(k=>{
+    if(state.settings[k] === undefined) state.settings[k] = def.settings[k];
+  });
+  if(!state.settings.roundUp) state.settings.roundUp = def.settings.roundUp;
+  if(!state.profile.projectName){
+    state.profile.projectName = state.profile.name ? state.profile.name+"'s Savings Plan" : 'My Savings Plan';
+  }
+  state.goals.forEach((g,i)=>{
+    if(g.order === undefined) g.order = g.createdAt || i;
+    if(g.archived === undefined) g.archived = false;
+  });
+  state.shifts.forEach(s=>{
+    if(s.tag === undefined) s.tag = '';
+    if(!Array.isArray(s.allocations)) s.allocations = [];
+    if(s.unallocated === undefined) s.unallocated = 0;
+  });
+}
+
+function registerServiceWorker(){
+  // Installed iOS web apps cache hard. A network-first worker means the
+  // app pulls the newest build whenever there's a connection, and still
+  // opens offline from cache when there isn't.
+  if(!('serviceWorker' in navigator)) return;
+  if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  navigator.serviceWorker.register('sw.js').catch(()=>{ /* fine without it */ });
+}
+
 function boot(){
   persistenceOK = storageProbe();
   wireStatic();
+  registerServiceWorker();
   const loaded = loadState();
 
   if(loaded){
     state = loaded;
-    // defensive defaults for saves made before a feature existed
-    if(!state.settings) state.settings = { roundUp:{enabled:false, goalId:null}, payFrequency:'shift', occupation:null, incomeRange:null, referralSource:null, onboarded:true };
-    if(!state.settings.roundUp) state.settings.roundUp = {enabled:false, goalId:null};
-    if(!state.settings.payFrequency) state.settings.payFrequency = 'shift';
-    if(!state.profile.projectName) state.profile.projectName = state.profile.name ? state.profile.name+"'s Savings Plan" : 'My Savings Plan';
-
+    migrateState();
+    recomputeBalances();  // balances are derived, so rebuild them from the ledger
     setTimeout(()=>{
       document.getElementById('splash').classList.add('gone');
       document.getElementById('appShell').classList.add('show');
