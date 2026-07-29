@@ -490,6 +490,36 @@ input[type=range]::-webkit-slider-thumb{
 .calc-total{display:flex;justify-content:space-between;padding:12px 0 4px;font-size:16px;margin-top:4px;border-top:1px solid var(--border);}
 .calc-total b{font-family:var(--font-mono);color:var(--amber);font-size:19px;}
 
+/* ===================== PROJECT SWITCHER ===================== */
+.proj-switch{
+  display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;margin:0 -18px 4px;
+  padding-left:18px;padding-right:18px;
+}
+.proj-chip{
+  flex:0 0 auto;display:flex;align-items:center;gap:7px;
+  padding:9px 14px;border-radius:100px;background:var(--surface);
+  border:1.5px solid var(--border);font-size:13px;color:var(--text-dim);
+  transition:border-color .2s, background .2s, color .2s;white-space:nowrap;
+}
+.proj-chip .pc-emoji{font-size:15px;}
+.proj-chip.sel{border-color:var(--amber);background:var(--amber-soft);color:var(--text);}
+.proj-chip.add{border-style:dashed;color:var(--text-faint);}
+
+.proj-tile{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:15px 16px;display:flex;align-items:center;gap:13px;margin-bottom:10px;
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 12px 26px -18px rgba(0,0,0,.55);
+}
+.proj-tile-icon{
+  width:44px;height:44px;border-radius:14px;display:flex;align-items:center;
+  justify-content:center;font-size:21px;flex-shrink:0;
+}
+.proj-tile-main{flex:1;min-width:0;}
+.proj-tile-name{font-size:14.5px;font-weight:600;}
+.proj-tile-sub{font-size:11.5px;color:var(--text-faint);margin-top:2px;}
+.proj-tile-amt{text-align:right;}
+.proj-tile-amt .num{font-size:15px;}
+
 .info-btn{width:18px;height:18px;border-radius:50%;background:var(--surface-2);display:inline-flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:11px;font-style:italic;font-family:var(--font-display);margin-left:6px;vertical-align:middle;}
 
 /* ===================== ENV BANNER ===================== */
@@ -672,6 +702,15 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible{
   <div class="sheet-body" id="whatifBody"></div>
 </div>
 
+<!-- ============== SHEET: PROJECT EDITOR ============== -->
+<div class="sheet" id="sheetProject">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head"><h2 id="sheetProjectTitle">New project</h2>
+    <button class="sheet-close" data-close="sheetProject"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div class="sheet-body" id="projectBody"></div>
+</div>
+
 <!-- ============== SHEET: BUCKET DETAIL ============== -->
 <div class="sheet" id="sheetBucket">
   <div class="sheet-handle"></div>
@@ -735,7 +774,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible{
    ===================================================================== */
 
 const STORE_KEY = 'jarvest_v1';
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '3.0.0';
 const GOAL_COLORS = ['#E8A33D','#4FBF9F','#8B85E0','#E2604F','#F2B857','#5FA8D3'];
 const GOAL_ICONS = ['🛟','💻','✈️','🎸','🍵','🏠','🚗','🎓','💍','🩺','🐾','🎮','📷','👶','🏝️','🎁','🍹','⛽','🧾','🌧️'];
 const CURRENCIES = ['$','€','£','₪'];
@@ -887,17 +926,61 @@ function showInfo(title, html){
 function freshState(){
   return {
     profile: { name:'', projectName:'My Savings Plan', avatar:'⚡', currency:'$', defaultRate:20 },
+    projects: [],
     goals: [],
     shifts: [],
     movements: [],
     settings: {
       roundUp: { enabled:true, goalId:null },
       payFrequency:'shift', occupation:null, incomeRange:null, referralSource:null,
-      monthlyGoal:0, privacy:false, tourSeen:false,
+      monthlyGoal:0, privacy:false, tourSeen:false, activeProjectId:null,
       onboarded:false
     }
   };
 }
+
+/* =====================================================================
+   PROJECTS
+   A project is one income source — a job, a client, a side gig. Money
+   logged against it only ever splits across that project's own buckets,
+   so two jobs can have completely different goals and percentages.
+   ===================================================================== */
+const PROJECT_ICONS = ['💼','🍽️','🛍️','🚗','🩺','📦','💻','🎨','🔧','🏫','🎬','🌱'];
+
+function projectsList(){
+  return state.projects.filter(p=>!p.archived)
+    .slice().sort((a,b)=> ((a.order??a.createdAt) - (b.order??b.createdAt)));
+}
+function archivedProjects(){ return state.projects.filter(p=>p.archived); }
+function activeProjectId(){ return state.settings.activeProjectId; } // null === overview of everything
+function activeProject(){ return state.projects.find(p=>p.id===activeProjectId()) || null; }
+function setActiveProject(id){
+  state.settings.activeProjectId = id;
+  saveState();
+  renderActiveScreen();
+}
+function projectById(id){ return state.projects.find(p=>p.id===id) || null; }
+
+/* goals/shifts scoped to a project (or to everything when id is null) */
+function goalsOf(projectId){
+  const g = state.goals.filter(x=> !x.archived && (projectId==null || x.projectId===projectId));
+  return g.slice().sort((a,b)=> ((a.order??a.createdAt) - (b.order??b.createdAt)));
+}
+function shiftsOf(projectId){
+  return state.shifts.filter(s=> projectId==null || s.projectId===projectId);
+}
+function createProject({name, icon, color}){
+  const p = {
+    id: uid(), name: name || 'New project',
+    icon: icon || PROJECT_ICONS[0], color: color || GOAL_COLORS[0],
+    archived:false, createdAt: Date.now(), order: Date.now()
+  };
+  state.projects.push(p);
+  return p;
+}
+function projectEarned(projectId){ return round2(shiftsOf(projectId).reduce((s,x)=>s+x.amount,0)); }
+function projectStashed(projectId){ return round2(goalsOf(projectId).reduce((s,g)=>s+g.current,0)); }
+function projectFreeCash(projectId){ return round2(shiftsOf(projectId).reduce((s,x)=>s+(x.unallocated||0),0)); }
 
 /* =====================================================================
    BALANCE LEDGER
@@ -1108,14 +1191,16 @@ function applyRoundUp(amount, result, goals){
 /* Commits a shift: runs the engine, writes goal.current increments,
    stores the shift + its receipt, and (unless silent, used only for
    seeding) surfaces toast/celebration/haptics for freshly-completed goals. */
-function commitShift({amount, hours, rate, tips, note, tag, dateISO, silent}){
+function commitShift({amount, hours, rate, tips, note, tag, dateISO, projectId, silent}){
   amount = round2(amount);
+  projectId = projectId || activeProjectId() || (projectsList()[0] && projectsList()[0].id) || null;
+  const scoped = goalsOf(projectId);   // only this project's buckets take a share
   const before = new Map(state.goals.map(g=>[g.id, g.current]));
-  let result = computeAllocation(amount, state.goals);
-  result = applyRoundUp(amount, result, state.goals);
+  let result = computeAllocation(amount, scoped);
+  result = applyRoundUp(amount, result, scoped);
 
   const shift = {
-    id: uid(), dateISO: dateISO || new Date().toISOString(),
+    id: uid(), projectId, dateISO: dateISO || new Date().toISOString(),
     amount, hours: hours||null, rate: rate||null, tips: tips||0,
     note: note||'', tag: tag||'', allocations: result.allocations, unallocated: result.unallocated,
     createdAt: Date.now()
@@ -1173,13 +1258,13 @@ function updateShift(id, patch){
   if(!s) return null;
   Object.assign(s, patch);
   if(patch.amount != null){
-    // re-split the edited amount with today's bucket setup
-    const others = state.shifts.filter(x=>x.id!==id);
+    // re-split the edited amount across that project's current buckets
     const snapshot = state.shifts;
-    state.shifts = others;
+    state.shifts = state.shifts.filter(x=>x.id!==id);
     recomputeBalances();
-    let result = computeAllocation(s.amount, state.goals);
-    result = applyRoundUp(s.amount, result, state.goals);
+    const scoped = goalsOf(s.projectId);
+    let result = computeAllocation(s.amount, scoped);
+    result = applyRoundUp(s.amount, result, scoped);
     s.allocations = result.allocations;
     s.unallocated = result.unallocated;
     state.shifts = snapshot;
@@ -1271,11 +1356,11 @@ function shiftsInRange(days){
   const cutoff = Date.now() - days*86400000;
   return state.shifts.filter(s=> new Date(s.dateISO).getTime() >= cutoff);
 }
-function activeGoals(){
-  const g = state.goals.filter(x=>!x.archived);
-  return g.slice().sort((a,b)=> ((a.order??a.createdAt) - (b.order??b.createdAt)));
+function activeGoals(){ return goalsOf(activeProjectId()); }
+function archivedGoals(){
+  const pid = activeProjectId();
+  return state.goals.filter(g=> g.archived && (pid==null || g.projectId===pid));
 }
-function archivedGoals(){ return state.goals.filter(g=>g.archived); }
 
 /* ---- monthly income goal ---- */
 function monthToDateEarned(){
@@ -1301,7 +1386,7 @@ function goalPace(g){
 /* ---- day-of-week performance ---- */
 function dayOfWeekStats(){
   const buckets = Array.from({length:7}, ()=>({total:0, count:0}));
-  state.shifts.forEach(s=>{
+  analyticsShifts().forEach(s=>{
     const d = new Date(s.dateISO).getDay();
     buckets[d].total += s.amount; buckets[d].count++;
   });
@@ -1320,7 +1405,7 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 /* ---- per-employer / per-tag breakdown ---- */
 function tagStats(){
   const map = new Map();
-  state.shifts.forEach(s=>{
+  analyticsShifts().forEach(s=>{
     const t = (s.tag||'').trim();
     if(!t) return;
     if(!map.has(t)) map.set(t,{tag:t,total:0,count:0,hours:0});
@@ -1334,12 +1419,14 @@ function tagStats(){
   })).sort((a,b)=>b.total-a.total);
 }
 function knownTags(){ return [...new Set(state.shifts.map(s=>(s.tag||'').trim()).filter(Boolean))]; }
+// analytics follow the project switcher, so charts match what's on screen
+function analyticsShifts(){ return shiftsOf(activeProjectId()); }
 
 /* ---- cumulative stashed over time ---- */
 function cumulativeSeries(points){
   points = points || 12;
   const now = startOfDay(new Date());
-  const sorted = [...state.shifts].sort((a,b)=> new Date(a.dateISO)-new Date(b.dateISO));
+  const sorted = [...analyticsShifts()].sort((a,b)=> new Date(a.dateISO)-new Date(b.dateISO));
   if(!sorted.length) return [];
   const firstT = Math.min(new Date(sorted[0].dateISO).getTime(), now.getTime()-6*86400000);
   const span = Math.max(1, now.getTime()+86400000 - firstT);
@@ -1356,44 +1443,71 @@ function cumulativeSeries(points){
 function renderHome(){
   const el = document.getElementById('screen-home');
   const p = state.profile;
-  const week = shiftsInRange(7);
+  const pid = activeProjectId();
+  const proj = activeProject();
+  const scopedShifts = shiftsOf(pid);
+  const week = scopedShifts.filter(s=> new Date(s.dateISO).getTime() >= Date.now()-7*86400000);
   const weekTotal = round2(week.reduce((s,x)=>s+x.amount,0));
-  const lastShift = state.shifts[0];
+  const lastShift = scopedShifts[0];
   const bestWeek = personalBestWeek();
   const isNewBest = weekTotal>0 && bestWeek>0 && weekTotal>=bestWeek;
+  const earned = projectEarned(pid), stashed = projectStashed(pid), free = projectFreeCash(pid);
+
+  // In "All" mode, show how each project is doing side by side.
+  const overviewHtml = (pid==null && projectsList().length) ? `
+    <div class="section-title">Your projects</div>
+    ${projectsList().map(pr=>{
+      const e = projectEarned(pr.id), st = projectStashed(pr.id), n = shiftsOf(pr.id).length;
+      return `<div class="proj-tile" data-action="pickProject" data-id="${pr.id}">
+        <div class="proj-tile-icon" style="background:${pr.color}22;">${pr.icon}</div>
+        <div class="proj-tile-main">
+          <div class="proj-tile-name">${escapeHtml(pr.name)}</div>
+          <div class="proj-tile-sub">${n} ${n===1?unitWord():unitWordPlural()} · ${goalsOf(pr.id).length} bucket${goalsOf(pr.id).length===1?'':'s'}</div>
+        </div>
+        <div class="proj-tile-amt"><div class="num">${fmtMoney(e)}</div>
+          <div style="font-size:10.5px;color:var(--text-faint)">${fmtMoney(st)} saved</div></div>
+      </div>`;
+    }).join('')}` : '';
 
   let pourHtml;
   if(lastShift){
     const jars = lastShift.allocations.filter(a=>a.amount>0.004).map(a=>{
       const g = state.goals.find(x=>x.id===a.goalId);
       if(!g) return '';
-      const pct = g.target ? Math.round((g.current/g.target)*100) : null;
       return `<div class="pour-jar-slot">
         ${jarSvg(g.target? (g.current/g.target*100):60, g.color, {w:52,h:68})}
         <div class="pour-jar-pct num">+${fmtMoney(a.amount)}</div>
         <div class="pour-jar-name">${g.icon} ${escapeHtml(g.title)}</div>
       </div>`;
     }).join('');
+    const lastProj = projectById(lastShift.projectId);
     pourHtml = `
       <div class="pour-card">
-        <div class="pour-title">Last ${unitWord()} · ${fmtDate(lastShift.dateISO,{short:true})} <span class="num" style="color:var(--text)">${fmtMoney(lastShift.amount)}</span></div>
+        <div class="pour-title">Last ${unitWord()} · ${fmtDate(lastShift.dateISO,{short:true})}${lastProj&&pid==null?` · ${lastProj.icon} ${escapeHtml(lastProj.name)}`:''} <span class="num" style="color:var(--text)">${fmtMoney(lastShift.amount)}</span></div>
         <div class="pour-stage">
           <div class="pour-source">${fmtMoney(lastShift.amount,{whole:true})}<div class="pour-drop"></div></div>
         </div>
         <div class="pour-jars">${jars || '<div class="empty-state" style="padding:10px;"><p>All of it stayed as free cash.</p></div>'}</div>
         ${lastShift.unallocated>0.004 ? `<div class="field-hint" style="text-align:center;margin-top:10px;">+${fmtMoney(lastShift.unallocated)} left as free cash</div>` : ''}
       </div>`;
+  } else if(projectsList().length===0){
+    pourHtml = `<div class="pour-card"><div class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="16" height="13" rx="2.5"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/></svg>
+      <p>Start with a project — a job or income source. Each one keeps its own money and its own goals.</p>
+      <button class="btn btn-primary btn-sm" style="margin-top:12px;" data-action="newProject">Create your first project</button>
+    </div></div>`;
   } else {
     pourHtml = `<div class="pour-card"><div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="9" width="12" height="12" rx="2.5"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg>
-      <p>Log your first ${unitWord()} and watch it split across your buckets.</p>
+      <p>Log your first ${unitWord()}${proj?' for '+escapeHtml(proj.name):''} and watch it split across your buckets.</p>
     </div></div>`;
   }
 
-  const recent = state.shifts.slice(0,8).map(s=>{
+  const recent = scopedShifts.slice(0,8).map(s=>{
+    const sp = projectById(s.projectId);
     const sub = s.hours ? `${s.hours}h · ${fmtMoney(s.rate)}/hr${s.tips?' · '+fmtMoney(s.tips)+' tips':''}` : (s.note || s.tag || 'Manual entry');
     return `<div class="activity-row" data-action="editShift" data-id="${s.id}">
-      <div class="activity-icon">💰</div>
+      <div class="activity-icon" style="${sp?`background:${sp.color}22;`:''}">${sp?sp.icon:'💰'}</div>
       <div class="activity-main">
         <div class="activity-title">${fmtDate(s.dateISO,{weekday:true})}${s.tag?` <span style="color:var(--text-faint);font-weight:400;">· ${escapeHtml(s.tag)}</span>`:''}</div>
         <div class="activity-sub">${escapeHtml(sub)}</div>
@@ -1408,7 +1522,7 @@ function renderHome(){
   const monthlyHtml = mg>0 ? `
     <div class="card" style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;">
-        <span style="font-size:12.5px;color:var(--text-faint);">This month</span>
+        <span style="font-size:12.5px;color:var(--text-faint);">This month${pid!=null?' · all projects':''}</span>
         <span class="num" style="font-size:13px;">${fmtMoney(mtd)} <span style="color:var(--text-faint)">/ ${fmtMoney(mg)}</span></span>
       </div>
       <div style="height:9px;border-radius:100px;background:var(--surface-3);overflow:hidden;">
@@ -1430,13 +1544,15 @@ function renderHome(){
       </div>
     </div>
 
+    ${projSwitchHtml()}
+
     <div class="balance-hero">
-      <div class="balance-label">Total balance</div>
-      <div class="balance-amount num">${fmtMoney(totalEarned())}</div>
-      <div class="balance-sub"><b class="num">${fmtMoney(totalStashed())}</b> stashed in buckets · <b class="num" style="color:var(--amber)">${fmtMoney(freeCash())}</b> free</div>
+      <div class="balance-label">${proj ? proj.icon+' '+escapeHtml(proj.name) : 'All projects'}</div>
+      <div class="balance-amount num">${fmtMoney(earned)}</div>
+      <div class="balance-sub"><b class="num">${fmtMoney(stashed)}</b> stashed in buckets · <b class="num" style="color:var(--amber)">${fmtMoney(free)}</b> free</div>
       <div class="balance-stats-row">
         <div class="mini-stat"><div class="mini-stat-label">This week</div><div class="mini-stat-val num">${fmtMoney(weekTotal)}</div></div>
-        <div class="mini-stat"><div class="mini-stat-label">${unitWordPlural(true)} logged</div><div class="mini-stat-val num">${state.shifts.length}</div></div>
+        <div class="mini-stat"><div class="mini-stat-label">${unitWordPlural(true)} logged</div><div class="mini-stat-val num">${scopedShifts.length}</div></div>
       </div>
       ${isNewBest ? `<div class="best-week-ribbon">🏆 Best week yet — last best was ${fmtMoney(bestWeek)}</div>` : ''}
     </div>
@@ -1446,15 +1562,16 @@ function renderHome(){
         <span class="fab-log-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
         <span class="fab-log-text">
           <span class="fab-log-title">${state.settings.payFrequency==='payday' ? 'Log your paycheck' : 'Log shift earnings'}</span>
-          <span class="fab-log-sub">${state.settings.payFrequency==='payday' ? 'Enter the total, or hours × rate' : 'Enter a total, or hours × rate'}</span>
+          <span class="fab-log-sub">${proj ? 'Into '+escapeHtml(proj.name) : 'Choose which project it came from'}</span>
         </span>
       </button>
-      ${state.shifts.length ? `<div style="display:flex;gap:8px;margin-top:10px;">
+      ${scopedShifts.length ? `<div style="display:flex;gap:8px;margin-top:10px;">
         <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="quickLog">↻ Same as last</button>
         <button class="btn btn-secondary btn-sm" style="flex:1;" data-action="undoLast">↶ Undo last</button>
       </div>` : ''}
     </div>
     ${monthlyHtml}
+    ${overviewHtml}
 
     <div class="section-title">Where it went</div>
     ${pourHtml}
@@ -1478,8 +1595,25 @@ function escapeHtml(s){
 /* ===================== BUCKETS ===================== */
 function renderBuckets(){
   const el = document.getElementById('screen-buckets');
-  const goals = activeGoals();
-  const totalPct = goals.reduce((s,g)=>s+g.pct,0);
+  const pid = activeProjectId();
+  const proj = activeProject();
+
+  // Percentages only mean something inside one project, so ask for one.
+  if(pid == null){
+    el.innerHTML = `
+      <div class="page-eyebrow">Buckets</div>
+      <div class="page-title">Your goals</div>
+      ${projSwitchHtml()}
+      <div class="card"><div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="16" height="13" rx="2.5"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/></svg>
+        <p>${projectsList().length ? 'Pick a project above to see and tune its buckets — each project splits its own money.' : 'Create a project first. Each one is a separate income source with its own goals and percentages.'}</p>
+        ${projectsList().length ? '' : '<button class="btn btn-primary btn-sm" style="margin-top:12px;" data-action="newProject">New project</button>'}
+      </div></div>`;
+    return;
+  }
+
+  const goals = goalsOf(pid);
+  const totalPct = round2(goals.reduce((s,g)=>s+g.pct,0));
 
   const bar = goals.map(g=> `<div style="width:${g.pct}%;background:${g.color};height:100%;"></div>`).join('')
     + (totalPct<100 ? `<div style="width:${100-totalPct}%;background:var(--surface-3);height:100%;"></div>` : '');
@@ -1510,7 +1644,10 @@ function renderBuckets(){
 
   el.innerHTML = `
     <div class="page-eyebrow">Buckets</div>
-    <div class="page-title">Your goals</div>
+    <div class="page-title">${proj.icon} ${escapeHtml(proj.name)}
+      <button class="btn btn-ghost btn-sm" style="font-size:12px;padding:4px 8px;" data-action="editProject" data-id="${proj.id}">edit</button>
+    </div>
+    ${projSwitchHtml()}
 
     <div class="card" style="padding:16px 18px;">
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-faint);margin-bottom:8px;">
@@ -1543,7 +1680,10 @@ function renderBuckets(){
 }
 
 function goalRemainingPctBudget(excludeId){
-  const goals = activeGoals().filter(g=>g.id!==excludeId);
+  // each project has its own independent 100% to divide up
+  const edited = excludeId ? state.goals.find(g=>g.id===excludeId) : null;
+  const pid = edited ? edited.projectId : (activeProjectId() || (projectsList()[0] && projectsList()[0].id));
+  const goals = goalsOf(pid).filter(g=>g.id!==excludeId);
   return round2(100 - goals.reduce((s,g)=>s+g.pct,0));
 }
 
@@ -1635,9 +1775,10 @@ function saveGoalFromSheet(){
     const g = state.goals.find(x=>x.id===uiState.editingGoalId);
     Object.assign(g, {title, icon, color, target, targetDate, pct, locked});
   } else {
+    const pid = activeProjectId() || (projectsList()[0] && projectsList()[0].id) || null;
     state.goals.push({
-      id:uid(), title, icon, color, target, targetDate, pct, locked,
-      current:0, archived:false, createdAt:Date.now()
+      id:uid(), projectId:pid, title, icon, color, target, targetDate, pct, locked,
+      current:0, archived:false, createdAt:Date.now(), order:Date.now()
     });
   }
   saveState();
@@ -1673,7 +1814,7 @@ function weeklyBuckets(nWeeks){
   for(let i=nWeeks-1;i>=0;i--){
     const end = new Date(now.getTime() - i*days*86400000 + (days-1)*86400000 + 86399999);
     const start = new Date(now.getTime() - i*days*86400000);
-    const total = state.shifts.filter(s=>{
+    const total = analyticsShifts().filter(s=>{
       const t = new Date(s.dateISO).getTime();
       return t>=start.getTime() && t<=end.getTime();
     }).reduce((s,x)=>s+x.amount,0);
@@ -1687,7 +1828,7 @@ function heatmapDays(n){
   for(let i=n-1;i>=0;i--){
     const d = new Date(now.getTime()-i*86400000);
     const dEnd = d.getTime()+86399999;
-    const total = state.shifts.filter(s=>{
+    const total = analyticsShifts().filter(s=>{
       const t = new Date(s.dateISO).getTime();
       return t>=d.getTime() && t<=dEnd;
     }).reduce((s,x)=>s+x.amount,0);
@@ -1695,7 +1836,10 @@ function heatmapDays(n){
   }
   return days;
 }
-function avgShiftAmount(){ return state.shifts.length ? totalEarned()/state.shifts.length : 0; }
+function avgShiftAmount(){
+  const list = analyticsShifts();
+  return list.length ? list.reduce((s,x)=>s+x.amount,0)/list.length : 0;
+}
 function personalBestWeek(){
   const weeks = weeklyBuckets(52);
   const priorWeeks = weeks.slice(0,-1);
@@ -1709,8 +1853,9 @@ function projectGoal(goal, hypoPct){
   if(!isFinite(remaining) || remaining<=0.01 || perShift<=0.01) return null;
   const shiftsNeeded = Math.ceil(remaining/perShift);
   let daysNeeded = null;
-  if(state.shifts.length>=2){
-    const sorted = [...state.shifts].sort((a,b)=>new Date(a.dateISO)-new Date(b.dateISO));
+  const cadenceList = analyticsShifts();
+  if(cadenceList.length>=2){
+    const sorted = [...cadenceList].sort((a,b)=>new Date(a.dateISO)-new Date(b.dateISO));
     const span = Math.max(1, daysBetween(new Date(sorted[0].dateISO), new Date(sorted[sorted.length-1].dateISO)));
     const avgGap = span/(sorted.length-1);
     daysNeeded = Math.max(1, Math.round(shiftsNeeded*avgGap));
@@ -1718,7 +1863,7 @@ function projectGoal(goal, hypoPct){
   return { shiftsNeeded, daysNeeded };
 }
 function currentStreak(){
-  const weeksWithShift = new Set(state.shifts.map(s=>isoWeekKey(s.dateISO)));
+  const weeksWithShift = new Set(analyticsShifts().map(s=>isoWeekKey(s.dateISO)));
   let count=0;
   const now = new Date();
   if(weeksWithShift.has(isoWeekKey(now))) count=1;
@@ -1756,11 +1901,11 @@ function renderInsights(){
     return `<div class="heat-cell" data-level="${level}" title="${fmtDate(d.date.toISOString(),{short:true})}: ${fmtMoney(d.total)}"></div>`;
   }).join('');
 
-  const hoursShifts = state.shifts.filter(s=>s.hours);
+  const hoursShifts = analyticsShifts().filter(s=>s.hours);
   const totalHours = round2(hoursShifts.reduce((s,x)=>s+x.hours,0));
-  const avgPerShift = state.shifts.length ? avgShiftAmount() : 0;
+  const avgPerShift = analyticsShifts().length ? avgShiftAmount() : 0;
 
-  const projections = activeGoals()
+  const projections = goalsOf(activeProjectId())
     .filter(g=>g.target && !isGoalComplete(g))
     .map(g=>({g, p: projectGoal(g)}))
     .filter(x=>x.p)
@@ -1829,7 +1974,8 @@ function renderInsights(){
 
   el.innerHTML = `
     <div class="page-eyebrow">Insights</div>
-    <div class="page-title">Your shift patterns</div>
+    <div class="page-title">${activeProject() ? activeProject().icon+' '+escapeHtml(activeProject().name) : 'All projects'}</div>
+    ${projSwitchHtml()}
 
     <div class="stat-row-2">
       <div class="stat-tile"><div class="mini-stat-label">Avg per ${unitWord()}</div><div class="mini-stat-val num" style="font-size:20px;margin-top:4px;">${fmtMoney(avgPerShift)}</div></div>
@@ -2120,7 +2266,19 @@ function openLogShiftSheet(){
 function buildLogShiftBody(){
   const mode = uiState.logShiftMode;
   const rate = state.profile.defaultRate || 0;
+  const list = projectsList();
+  if(!uiState.logProjectId || !projectById(uiState.logProjectId)){
+    uiState.logProjectId = activeProjectId() || (list[0] && list[0].id) || null;
+  }
   document.getElementById('logShiftBody').innerHTML = `
+    ${list.length ? `<div class="field">
+      <label>Which project is this from?</label>
+      <div class="proj-switch" style="margin:0 0 2px;padding-left:0;padding-right:0;">
+        ${list.map(p=>`<button class="proj-chip ${p.id===uiState.logProjectId?'sel':''}" data-action="pickLogProject" data-id="${p.id}">
+          <span class="pc-emoji">${p.icon}</span>${escapeHtml(p.name)}</button>`).join('')}
+      </div>
+    </div>` : `<div class="field-hint warn" style="margin-bottom:14px;">Create a project first — income has to belong to one.</div>`}
+
     <div class="field">
       <div class="segmented">
         <button class="${mode==='total'?'active':''}" data-action="setLogMode" data-val="total">Total amount</button>
@@ -2200,7 +2358,8 @@ function recomputeLogShiftPreview(){
       `;
     }
   }
-  const result = applyRoundUp(amount, computeAllocation(amount, state.goals), state.goals);
+  const scoped = goalsOf(uiState.logProjectId);
+  const result = applyRoundUp(amount, computeAllocation(amount, scoped), scoped);
   const lines = result.allocations.filter(a=>a.amount>0.004).map(a=>{
     const g = state.goals.find(x=>x.id===a.goalId);
     if(!g) return '';
@@ -2214,6 +2373,8 @@ function recomputeLogShiftPreview(){
 function setLogMode(mode){ uiState.logShiftMode = mode; buildLogShiftBody(); }
 
 function submitLogShift(){
+  if(!projectsList().length){ toast('Create a project first'); return; }
+  if(!uiState.logProjectId){ toast('Pick which project this is from'); return; }
   const amount = computeLogShiftAmount();
   if(amount<=0){ toast('Enter an amount greater than zero'); return; }
   const dateVal = document.getElementById('lsDate').value || todayInputValue();
@@ -2225,7 +2386,7 @@ function submitLogShift(){
     rate = parseFloat(document.getElementById('lsRate').value)||0;
     tips = parseFloat(document.getElementById('lsTips').value)||0;
   }
-  commitShift({amount, hours, rate, tips, note, tag:(document.getElementById('lsTag')||{}).value?.trim()||'', dateISO});
+  commitShift({amount, hours, rate, tips, note, tag:(document.getElementById('lsTag')||{}).value?.trim()||'', dateISO, projectId:uiState.logProjectId});
   closeSheet('sheetLogShift');
   renderActiveScreen();
   if(uiState.activeTab!=='home') { /* home will refresh next visit */ }
@@ -2281,6 +2442,19 @@ function wireStatic(){
     const lockSwitch = e.target.closest('#goalLockSwitch');
     if(lockSwitch){ lockSwitch.classList.toggle('on'); return; }
 
+    const pIconOpt = e.target.closest('#projIconGrid .emoji-opt');
+    if(pIconOpt){
+      document.querySelectorAll('#projIconGrid .emoji-opt').forEach(b=>b.classList.remove('sel'));
+      pIconOpt.classList.add('sel');
+      return;
+    }
+    const pColorOpt = e.target.closest('#projColorGrid .swatch-opt');
+    if(pColorOpt){
+      document.querySelectorAll('#projColorGrid .swatch-opt').forEach(b=>b.classList.remove('sel'));
+      pColorOpt.classList.add('sel');
+      return;
+    }
+
     const actionEl = e.target.closest('[data-action]');
     if(!actionEl) return;
     haptic();
@@ -2332,6 +2506,16 @@ function wireStatic(){
       case 'importJson': document.getElementById('importFile').click(); break;
       case 'quickLog': quickLogSameAsLast(); break;
       case 'checkUpdate': checkForUpdate(); break;
+      case 'pickProject': pickProject(id); break;
+      case 'newProject': openProjectSheet(null); break;
+      case 'editProject': openProjectSheet(id); break;
+      case 'saveProject': saveProjectFromSheet(); break;
+      case 'archiveProject': archiveProject(id); break;
+      case 'deleteProject': deleteProjectConfirmed(id); break;
+      case 'pickLogProject':
+        uiState.logProjectId = id;
+        buildLogShiftBody();
+        break;
       case 'obPick': obPick(actionEl.dataset.field, actionEl.dataset.val); break;
       case 'obNext': obNext(); break;
       case 'obBack': obBack(); break;
@@ -2476,13 +2660,21 @@ function finishOnboarding(){
   state.settings.referralSource = ob.referral;
   state.settings.onboarded = true;
 
+  // every income source is a project — create the first from their answers
+  const firstProject = createProject({
+    name: occInfo ? occInfo.label : 'My Work',
+    icon: occInfo ? occInfo.emoji : '💼',
+    color: GOAL_COLORS[0]
+  });
+  state.settings.activeProjectId = firstProject.id;
+
   if(ob.wantSample && occInfo){
     occInfo.suggestions.forEach((s,i)=>{
       state.goals.push({
-        id:uid(), title:s.title, icon:s.icon, color:s.color,
+        id:uid(), projectId:firstProject.id, title:s.title, icon:s.icon, color:s.color,
         target: Math.round((350+i*300)*incomeInfo.scale/10)*10,
         current:0, pct:s.pct, locked:false,
-        targetDate:null, archived:false, createdAt:Date.now()+i
+        targetDate:null, archived:false, createdAt:Date.now()+i, order:Date.now()+i
       });
     });
     const ef = state.goals.find(g=>g.title.toLowerCase().includes('emergency'));
@@ -2976,6 +3168,7 @@ function migrateState(){
   const def = freshState();
   if(!state.profile) state.profile = def.profile;
   if(!state.settings) state.settings = def.settings;
+  if(!Array.isArray(state.projects)) state.projects = [];
   if(!Array.isArray(state.goals)) state.goals = [];
   if(!Array.isArray(state.shifts)) state.shifts = [];
   if(!Array.isArray(state.movements)) state.movements = [];
@@ -2986,6 +3179,31 @@ function migrateState(){
   if(!state.profile.projectName){
     state.profile.projectName = state.profile.name ? state.profile.name+"'s Savings Plan" : 'My Savings Plan';
   }
+
+  // Saves made before projects existed have loose goals/shifts — adopt
+  // them into one default project so nothing is orphaned or lost.
+  const orphanGoals  = state.goals.filter(g=>!g.projectId);
+  const orphanShifts = state.shifts.filter(s=>!s.projectId);
+  let createdDefaultProject = false;
+  if(state.projects.length === 0 && (orphanGoals.length || orphanShifts.length || state.settings.onboarded)){
+    const occ = OCCUPATIONS.find(o=>o.key===state.settings.occupation);
+    createProject({ name: occ ? occ.label : 'My Work', icon: occ ? occ.emoji : '💼', color: GOAL_COLORS[0] });
+    createdDefaultProject = true;
+  }
+  const fallbackId = state.projects.length ? state.projects[0].id : null;
+  orphanGoals.forEach(g=> g.projectId = fallbackId);
+  orphanShifts.forEach(s=> s.projectId = fallbackId);
+  if(state.settings.activeProjectId && !projectById(state.settings.activeProjectId)){
+    state.settings.activeProjectId = fallbackId;
+  }
+  // null is a valid choice ("All projects") for an existing user, but a save
+  // that predates projects should open in the project we just made for it.
+  if(createdDefaultProject) state.settings.activeProjectId = fallbackId;
+
+  state.projects.forEach((p,i)=>{
+    if(p.order === undefined) p.order = p.createdAt || i;
+    if(p.archived === undefined) p.archived = false;
+  });
   state.goals.forEach((g,i)=>{
     if(g.order === undefined) g.order = g.createdAt || i;
     if(g.archived === undefined) g.archived = false;
@@ -3004,6 +3222,111 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   navigator.serviceWorker.register('sw.js').catch(()=>{ /* fine without it */ });
+}
+
+/* ---------- project switcher + editor ---------- */
+function projSwitchHtml(){
+  const list = projectsList();
+  const cur = activeProjectId();
+  return `<div class="proj-switch">
+    <button class="proj-chip ${cur==null?'sel':''}" data-action="pickProject" data-id="">
+      <span class="pc-emoji">🗂️</span>All
+    </button>
+    ${list.map(p=>`<button class="proj-chip ${cur===p.id?'sel':''}" data-action="pickProject" data-id="${p.id}">
+      <span class="pc-emoji">${p.icon}</span>${escapeHtml(p.name)}
+    </button>`).join('')}
+    <button class="proj-chip add" data-action="newProject">+ Project</button>
+  </div>`;
+}
+
+function openProjectSheet(id){
+  uiState.editingProjectId = id || null;
+  const p = id ? projectById(id) : null;
+  document.getElementById('sheetProjectTitle').textContent = p ? 'Edit project' : 'New project';
+  const icon = (p && p.icon) || PROJECT_ICONS[0];
+  const color = (p && p.color) || GOAL_COLORS[0];
+  const bucketCount = p ? goalsOf(p.id).length : 0;
+  const shiftCount = p ? shiftsOf(p.id).length : 0;
+
+  document.getElementById('projectBody').innerHTML = `
+    <div class="field">
+      <label>Project name</label>
+      <input class="input" id="projNameInput" maxlength="30" placeholder="e.g. The Grill House" value="${p?escapeHtml(p.name):''}">
+      <div class="field-hint">One income source — a job, a client, a side gig. Money you log here only splits across this project's own buckets.</div>
+    </div>
+    <div class="field">
+      <label>Icon</label>
+      <div class="emoji-grid" id="projIconGrid">
+        ${PROJECT_ICONS.map(e=>`<button class="emoji-opt ${e===icon?'sel':''}" data-val="${e}">${e}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label>Color</label>
+      <div class="swatch-grid" id="projColorGrid">
+        ${GOAL_COLORS.map(c=>`<button class="swatch-opt ${c===color?'sel':''}" data-val="${c}" style="background:${c}"></button>`).join('')}
+      </div>
+    </div>
+    <button class="btn btn-primary btn-block" data-action="saveProject">${p?'Save changes':'Create project'}</button>
+    ${p?`
+      <button class="btn btn-secondary btn-block" style="margin-top:10px;" data-action="archiveProject" data-id="${p.id}">${p.archived?'Restore project':'Archive project'}</button>
+      <button class="btn btn-danger btn-block" style="margin-top:10px;" data-action="deleteProject" data-id="${p.id}">Delete project</button>
+      <div class="field-hint" style="margin-top:8px;">Deleting removes its ${bucketCount} bucket${bucketCount===1?'':'s'} and ${shiftCount} logged ${shiftCount===1?unitWord():unitWordPlural()} too.</div>
+    `:''}
+  `;
+  openSheet('sheetProject');
+}
+
+function saveProjectFromSheet(){
+  const name = document.getElementById('projNameInput').value.trim();
+  if(!name){ toast('Give the project a name'); return; }
+  const icon = document.querySelector('#projIconGrid .sel')?.dataset.val || PROJECT_ICONS[0];
+  const color = document.querySelector('#projColorGrid .sel')?.dataset.val || GOAL_COLORS[0];
+  if(uiState.editingProjectId){
+    Object.assign(projectById(uiState.editingProjectId), {name, icon, color});
+    toast('Project updated');
+  } else {
+    const p = createProject({name, icon, color});
+    state.settings.activeProjectId = p.id;   // jump straight into the new one
+    toast('Project created — now add its buckets');
+  }
+  saveState();
+  closeSheet('sheetProject');
+  renderActiveScreen();
+}
+
+function archiveProject(id){
+  const p = projectById(id);
+  if(!p) return;
+  p.archived = !p.archived;
+  if(p.archived && activeProjectId()===id) state.settings.activeProjectId = null;
+  saveState();
+  closeSheet('sheetProject');
+  toast(p.archived?'Project archived':'Project restored');
+  renderActiveScreen();
+}
+
+function deleteProjectConfirmed(id){
+  const p = projectById(id);
+  if(!p) return;
+  const gCount = state.goals.filter(g=>g.projectId===id).length;
+  const sCount = state.shifts.filter(s=>s.projectId===id).length;
+  if(!confirm(`Delete "${p.name}"? This also removes its ${gCount} bucket${gCount===1?'':'s'} and ${sCount} logged ${sCount===1?unitWord():unitWordPlural()}. This can't be undone.`)) return;
+  const goalIds = new Set(state.goals.filter(g=>g.projectId===id).map(g=>g.id));
+  state.goals = state.goals.filter(g=>g.projectId!==id);
+  state.shifts = state.shifts.filter(s=>s.projectId!==id);
+  state.movements = (state.movements||[]).filter(m=> !goalIds.has(m.goalId) && !goalIds.has(m.toGoalId));
+  state.projects = state.projects.filter(x=>x.id!==id);
+  if(activeProjectId()===id) state.settings.activeProjectId = projectsList()[0] ? projectsList()[0].id : null;
+  recomputeBalances();
+  saveState();
+  closeSheet('sheetProject');
+  toast('Project deleted');
+  renderActiveScreen();
+}
+
+function pickProject(id){
+  setActiveProject(id || null);
+  haptic();
 }
 
 function boot(){
