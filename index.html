@@ -520,6 +520,25 @@ input[type=range]::-webkit-slider-thumb{
 .proj-tile-amt{text-align:right;}
 .proj-tile-amt .num{font-size:15px;}
 
+/* ===================== NUDGES ===================== */
+.nudge{
+  display:flex;gap:12px;align-items:flex-start;position:relative;
+  border-radius:var(--radius-lg);padding:14px 38px 14px 15px;margin-bottom:10px;
+  border:1px solid var(--border-strong);background:var(--surface);
+}
+.nudge-amber{background:linear-gradient(135deg,var(--amber-soft),transparent);border-color:rgba(232,163,61,.3);}
+.nudge-teal{background:linear-gradient(135deg,var(--teal-soft),transparent);border-color:rgba(79,191,159,.3);}
+.nudge-coral{background:linear-gradient(135deg,var(--coral-soft),transparent);border-color:rgba(226,96,79,.3);}
+.nudge-icon{font-size:20px;line-height:1.2;flex-shrink:0;}
+.nudge-main{flex:1;min-width:0;}
+.nudge-title{font-size:14px;font-weight:600;}
+.nudge-text{font-size:12.5px;color:var(--text-dim);line-height:1.45;margin-top:3px;}
+.nudge-x{
+  position:absolute;top:10px;right:10px;width:24px;height:24px;border-radius:50%;
+  background:rgba(0,0,0,.18);color:var(--text-faint);font-size:12px;
+  display:flex;align-items:center;justify-content:center;
+}
+
 .info-btn{width:18px;height:18px;border-radius:50%;background:var(--surface-2);display:inline-flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:11px;font-style:italic;font-family:var(--font-display);margin-left:6px;vertical-align:middle;}
 
 /* ===================== ENV BANNER ===================== */
@@ -774,7 +793,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible{
    ===================================================================== */
 
 const STORE_KEY = 'jarvest_v1';
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.1.0';
 const GOAL_COLORS = ['#E8A33D','#4FBF9F','#8B85E0','#E2604F','#F2B857','#5FA8D3'];
 const GOAL_ICONS = ['🛟','💻','✈️','🎸','🍵','🏠','🚗','🎓','💍','🩺','🐾','🎮','📷','👶','🏝️','🎁','🍹','⛽','🧾','🌧️'];
 const CURRENCIES = ['$','€','£','₪'];
@@ -934,6 +953,7 @@ function freshState(){
       roundUp: { enabled:true, goalId:null },
       payFrequency:'shift', occupation:null, incomeRange:null, referralSource:null,
       monthlyGoal:0, privacy:false, tourSeen:false, activeProjectId:null,
+      reminderTime:'19:00', reminderHour:19, dismissedNudges:{}, lastRecapWeek:null,
       onboarded:false
     }
   };
@@ -1545,6 +1565,7 @@ function renderHome(){
     </div>
 
     ${projSwitchHtml()}
+    ${nudgesHtml()}
 
     <div class="balance-hero">
       <div class="balance-label">${proj ? proj.icon+' '+escapeHtml(proj.name) : 'All projects'}</div>
@@ -2134,6 +2155,25 @@ function renderSettings(){
       </div>` : ''}
     </div>
 
+    <div class="section-title">Daily reminder <span class="link" data-action="info" data-topic="reminders">how it works</span></div>
+    <div class="card">
+      <div class="field">
+        <label>Remind me at</label>
+        <input class="input" id="reminderTimeInput" type="time" value="${state.settings.reminderTime||'19:00'}">
+      </div>
+      <button class="btn btn-primary btn-block" data-action="downloadReminder">Add daily reminder to calendar</button>
+      <div class="field-hint" style="margin-top:9px;">Creates a repeating daily alert in your calendar. It fires whether or not Jarvest is open — the web itself can't schedule notifications, so your calendar does it properly instead.</div>
+      <div class="toggle-row" style="margin-top:12px;">
+        <div class="toggle-row-text"><b>In-app notifications</b><span>${
+          (typeof Notification!=='undefined' && Notification.permission==='granted') ? 'On — nudges you when you open the app'
+          : (typeof Notification!=='undefined' && Notification.permission==='denied') ? 'Blocked in iOS Settings'
+          : 'Ask permission'}</span></div>
+        <button class="btn btn-secondary btn-sm" data-action="enableNotifications">${
+          (typeof Notification!=='undefined' && Notification.permission==='granted') ? 'Test' : 'Enable'}</button>
+      </div>
+      <div class="field-hint" style="margin-top:8px;">Tip: pair this with a Shortcuts automation to open Jarvest at your reminder time — tap "how it works" above for the steps.</div>
+    </div>
+
     <div class="section-title">Data</div>
     <div class="card">
       <div class="field" style="margin-bottom:12px;">
@@ -2248,6 +2288,7 @@ const INFO_TOPICS = {
   roundup: ()=>`<p>Splitting a ${unitWord()} by percentages usually leaves small cents behind in every bucket.</p>
     <p>Round-up sweeps that rounding dust — never your real money, just the leftover fractions — into one bucket of your choice, so nothing gets lost to rounding.</p>`,
   heatmap: ()=>`<p>Each cell is one day in the last 35 days. Darker amber means more was earned that day. Empty cells mean no ${unitWord()} was logged.</p>`,
+  reminders: ()=>REMINDER_HELP,
   privacy: ()=>`<p>Jarvest keeps everything on this device only, in your browser's local storage. There's no account, no server, and no data leaves your phone.</p>
     <p>That also means nothing is backed up automatically — use "Export ${unitWord()} history" in Settings to save a copy, and re-adding the app to your Home Screen from the same browser will keep your data as long as you haven't cleared Safari's site data.</p>`,
 };
@@ -2415,7 +2456,8 @@ function viewShift(id){
 /* ===================== EVENT WIRING ===================== */
 const TOPIC_TITLES = {
   allocation:'How auto-allocation works', templates:'Allocation templates',
-  roundup:'Round-up spare change', heatmap:'Shift heatmap', privacy:'Privacy & data'
+  roundup:'Round-up spare change', heatmap:'Shift heatmap', privacy:'Privacy & data',
+  reminders:'Daily reminders'
 };
 
 function wireStatic(){
@@ -2506,6 +2548,10 @@ function wireStatic(){
       case 'importJson': document.getElementById('importFile').click(); break;
       case 'quickLog': quickLogSameAsLast(); break;
       case 'checkUpdate': checkForUpdate(); break;
+      case 'dismissNudge': dismissNudge(id); break;
+      case 'downloadReminder': downloadReminder(); break;
+      case 'enableNotifications': enableNotifications(); break;
+      case 'goBuckets': if(id) setActiveProject(id); switchTab('buckets'); break;
       case 'pickProject': pickProject(id); break;
       case 'newProject': openProjectSheet(null); break;
       case 'editProject': openProjectSheet(id); break;
@@ -2528,6 +2574,7 @@ function wireStatic(){
 
   document.addEventListener('input', function(e){
     if(e.target.id==='goalPctInput') updateGoalPctHint();
+    if(e.target.id==='reminderTimeInput') setReminderTime(e.target.value);
   });
 
   document.addEventListener('change', function(e){
@@ -3329,6 +3376,230 @@ function pickProject(id){
   haptic();
 }
 
+/* =====================================================================
+   NUDGES
+   A true scheduled notification doesn't exist on the web platform, so
+   rather than fake one, the app computes what it would have told you
+   and surfaces it the moment you open it. Each nudge is dismissible and
+   comes back the next day if it's still true.
+   ===================================================================== */
+function todayKey(){ return new Date().toISOString().slice(0,10); }
+
+function loggedToday(){
+  const k = todayKey();
+  return state.shifts.some(s=> new Date(s.dateISO).toISOString().slice(0,10) === k);
+}
+function daysSinceLastShift(){
+  if(!state.shifts.length) return null;
+  return daysBetween(startOfDay(new Date(state.shifts[0].dateISO)), startOfDay(new Date()));
+}
+function isNudgeDismissed(id){
+  const d = (state.settings.dismissedNudges||{})[id];
+  return d === todayKey();
+}
+function dismissNudge(id){
+  if(!state.settings.dismissedNudges) state.settings.dismissedNudges = {};
+  state.settings.dismissedNudges[id] = todayKey();
+  saveState();
+  renderActiveScreen();
+}
+
+function computeNudges(){
+  const out = [];
+  const hour = new Date().getHours();
+  const since = daysSinceLastShift();
+  const projects = projectsList();
+
+  if(projects.length === 0){
+    out.push({ id:'noProject', tone:'amber', icon:'🗂️',
+      title:'Start with a project',
+      text:'A project is one income source — a job or a gig. Everything else hangs off it.',
+      btn:'Create project', action:'newProject' });
+    return out;
+  }
+
+  const emptyProj = projects.find(p=> goalsOf(p.id).length === 0);
+  if(emptyProj){
+    out.push({ id:'noBuckets:'+emptyProj.id, tone:'amber', icon:'🫙',
+      title:`${emptyProj.name} has no buckets yet`,
+      text:'Add a goal or two so its money has somewhere to go.',
+      btn:'Add a bucket', action:'goBuckets', data:emptyProj.id });
+  }
+
+  if(state.shifts.length && !loggedToday() && hour >= (state.settings.reminderHour ?? 19)){
+    out.push({ id:'noLogToday', tone:'amber', icon:'📝',
+      title:`Did you work today?`,
+      text:`Nothing logged yet today. If you earned something, drop it in while it's fresh.`,
+      btn:'Log it now', action:'openLogShift' });
+  }
+
+  if(since != null && since >= 4){
+    out.push({ id:'streakRisk', tone:'coral', icon:'⏳',
+      title:`${since} days since your last entry`,
+      text:'Catching up now keeps your averages and projections honest.',
+      btn:'Log an entry', action:'openLogShift' });
+  }
+
+  // a bucket drifting behind its own deadline
+  const behind = state.goals.filter(g=>!g.archived).map(g=>({g, p:goalPace(g)}))
+    .find(x=> x.p && !x.p.overdue && !x.p.onTrack && x.p.days <= 60);
+  if(behind){
+    out.push({ id:'behind:'+behind.g.id, tone:'amber', icon:'📉',
+      title:`${behind.g.icon} ${behind.g.title} is behind pace`,
+      text:`It needs ${fmtMoney(behind.p.perWeek)}/week to land on time, but it's getting about ${fmtMoney(behind.p.actualPerWeek)}.`,
+      btn:'Open bucket', action:'openBucket', data:behind.g.id });
+  }
+
+  // monthly target check, only once the month is far enough along to mean something
+  const mg = state.settings.monthlyGoal||0;
+  if(mg > 0){
+    const now = new Date();
+    const dayOfMonth = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    const expected = mg * (dayOfMonth/daysInMonth);
+    const mtd = monthToDateEarned();
+    if(dayOfMonth >= 10 && mtd < expected*0.75){
+      out.push({ id:'monthlyBehind', tone:'amber', icon:'🎯',
+        title:'Behind on this month’s target',
+        text:`${fmtMoney(mtd)} of ${fmtMoney(mg)} with ${daysInMonth-dayOfMonth} days left.`,
+        btn:null });
+    } else if(mtd >= mg){
+      out.push({ id:'monthlyHit', tone:'teal', icon:'🎉',
+        title:'Monthly target reached',
+        text:`${fmtMoney(mtd)} logged this month. Anything else is a bonus.`,
+        btn:null });
+    }
+  }
+
+  // weekly recap on the first open of a new week
+  const wk = isoWeekKey(new Date());
+  if(state.settings.lastRecapWeek && state.settings.lastRecapWeek !== wk && state.shifts.length){
+    const lastWeek = state.shifts.filter(s=>{
+      const t = new Date(s.dateISO).getTime();
+      return t >= Date.now()-14*86400000 && t < Date.now()-7*86400000;
+    }).reduce((a,s)=>a+s.amount,0);
+    const thisWeek = state.shifts.filter(s=> new Date(s.dateISO).getTime() >= Date.now()-7*86400000)
+      .reduce((a,s)=>a+s.amount,0);
+    if(lastWeek>0){
+      const diff = thisWeek-lastWeek;
+      out.push({ id:'recap:'+wk, tone:'teal', icon:'📊',
+        title:'Last week in review',
+        text:`${fmtMoney(lastWeek)} earned. ${diff>=0?`That's ${fmtMoney(Math.abs(diff))} more than the week before.`:`That's ${fmtMoney(Math.abs(diff))} less than the week before.`}`,
+        btn:'See insights', action:'goTab', data:'insights' });
+    }
+  }
+  state.settings.lastRecapWeek = wk;
+
+  return out.filter(n=> !isNudgeDismissed(n.id));
+}
+
+function nudgesHtml(){
+  const list = computeNudges();
+  if(!list.length) return '';
+  return list.slice(0,3).map(n=>`
+    <div class="nudge nudge-${n.tone}">
+      <div class="nudge-icon">${n.icon}</div>
+      <div class="nudge-main">
+        <div class="nudge-title">${n.title}</div>
+        <div class="nudge-text">${n.text}</div>
+        ${n.btn?`<button class="btn btn-secondary btn-sm" style="margin-top:9px;" data-action="${n.action}" data-id="${n.data||''}" data-tab="${n.data||''}">${n.btn}</button>`:''}
+      </div>
+      <button class="nudge-x" data-action="dismissNudge" data-id="${n.id}">✕</button>
+    </div>`).join('');
+}
+
+/* =====================================================================
+   DAILY REMINDER
+   The web platform has no scheduled/local notification — Apple's own
+   engineers confirm it isn't in the Notifications API, and real Web Push
+   needs a server this app deliberately doesn't have. So instead of
+   faking it, Jarvest hands the scheduling to something that genuinely
+   runs in the background: your calendar.
+   ===================================================================== */
+function pad2(n){ return String(n).padStart(2,'0'); }
+
+function buildReminderIcs(hour, minute){
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
+  if(start <= now) start.setDate(start.getDate()+1);   // first fire is tomorrow if today's slot passed
+  const fmt = d => `${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}T${pad2(d.getHours())}${pad2(d.getMinutes())}00`;
+  const stampUtc = new Date().toISOString().replace(/[-:]/g,'').split('.')[0]+'Z';
+  const end = new Date(start.getTime()+15*60000);
+  const label = state.settings.payFrequency==='payday' ? 'Log your pay in Jarvest' : 'Log your shift in Jarvest';
+  // Floating local time (no Z, no TZID) so it fires at this wall-clock time anywhere.
+  return [
+    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Jarvest//Daily Reminder//EN','CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    'UID:jarvest-daily-'+uid()+'@jarvest.app',
+    'DTSTAMP:'+stampUtc,
+    'DTSTART:'+fmt(start),
+    'DTEND:'+fmt(end),
+    'RRULE:FREQ=DAILY',
+    'SUMMARY:'+label,
+    'DESCRIPTION:Open Jarvest and record what you earned today so your buckets stay accurate.',
+    'BEGIN:VALARM','TRIGGER:PT0M','ACTION:DISPLAY','DESCRIPTION:'+label,'END:VALARM',
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+}
+
+function downloadReminder(){
+  const [h,m] = (state.settings.reminderTime || '19:00').split(':').map(Number);
+  state.settings.reminderHour = h;
+  saveState();
+  const blob = new Blob([buildReminderIcs(h, m||0)], {type:'text/calendar'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'jarvest-daily-reminder.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  toast('Reminder ready — open it to add to your calendar');
+}
+
+function setReminderTime(v){
+  state.settings.reminderTime = v;
+  const h = parseInt(v.split(':')[0],10);
+  if(!isNaN(h)) state.settings.reminderHour = h;
+  saveState();
+}
+
+/* Notifications only fire while the app is actually running, so this is
+   paired with the Shortcuts automation below rather than sold as a
+   standalone daily alert. */
+function enableNotifications(){
+  if(!('Notification' in window)){
+    toast('This device doesn’t support web notifications');
+    return;
+  }
+  Notification.requestPermission().then(perm=>{
+    state.settings.notifPermission = perm;
+    saveState();
+    if(perm === 'granted'){
+      toast('Notifications on');
+      showOpenNotification(true);
+    } else if(perm === 'denied'){
+      toast('Blocked — you can re-enable it in iOS Settings');
+    }
+    renderSettings();
+  }).catch(()=> toast('Couldn’t request permission here'));
+}
+
+function showOpenNotification(force){
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  if(!force && loggedToday()) return;
+  if(!force && state.settings.lastNotifDay === todayKey()) return;
+  state.settings.lastNotifDay = todayKey();
+  saveState();
+  const body = force ? 'This is what a daily nudge will look like.'
+    : `Nothing logged today yet. Tap to record what you earned.`;
+  try{
+    new Notification('Jarvest', { body, tag:'jarvest-daily' });
+  }catch(e){ /* some contexts require the SW registration instead */ }
+}
+
+const REMINDER_HELP = `<p><b style="color:var(--text)">Why not a plain daily push?</b> Scheduled notifications simply don't exist on the web — Apple's own engineers confirm it isn't part of the Notifications API. Real Web Push would need a server sending each alert, and Jarvest deliberately has no server and no account, so your money data never leaves your phone.</p>
+<p>The calendar reminder is the honest equivalent: it's scheduled by iOS itself, fires every day at your chosen time, and works whether or not the app is open.</p>
+<p><b style="color:var(--text)">Want it to open Jarvest automatically?</b> In the Shortcuts app: <i>Automation → + → Time of Day →</i> pick your time → <i>Run Immediately</i> → add the action <i>Open App</i> and choose Jarvest. Combined with notifications turned on, you'll get a nudge and land straight in the app.</p>`;
+
 function boot(){
   persistenceOK = storageProbe();
   wireStatic();
@@ -3344,6 +3615,7 @@ function boot(){
       document.getElementById('appShell').classList.add('show');
       switchTab('home');
       if(!persistenceOK) showEnvBanner();
+      setTimeout(showOpenNotification, 1200);
     }, 950);
   } else {
     setTimeout(()=>{
