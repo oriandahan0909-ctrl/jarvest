@@ -549,7 +549,8 @@ input[type=range]::-webkit-slider-thumb{
   position:fixed;max-width:310px;width:calc(100vw - 44px);
   background:var(--surface-2);border:1px solid var(--border-strong);border-radius:22px;
   padding:18px 18px 16px;z-index:501;box-shadow:0 24px 60px rgba(0,0,0,.45);
-  transition:top .45s var(--ease-spring), left .45s var(--ease-spring), bottom .45s var(--ease-spring);
+  transition:top .45s var(--ease-spring), left .45s var(--ease-spring);
+  max-height:calc(100vh - 150px);overflow-y:auto;
 }
 .tour-eyebrow{font-size:11px;color:var(--amber);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;}
 .tour-title{font-family:var(--font-display);font-size:18px;margin:0 0 6px;}
@@ -1008,21 +1009,36 @@ function applyRoundUp(amount, result, goals){
   const target = goals.find(g=>g.id===rc.goalId);
   if(!target || isGoalComplete(target)) return result;
 
-  let swept = 0;
-  const cleaned = result.allocations.map(a=>{
-    if(a.goalId === rc.goalId) return a;
-    const floor = Math.floor(a.amount);
-    swept += round2(a.amount - floor);
-    return { goalId:a.goalId, amount: floor };
-  });
-  swept += result.unallocated - Math.floor(result.unallocated);
+  // Floor every other bucket to a whole unit, then let the sweep bucket
+  // absorb the exact remainder. Deriving the sweep from the shift total
+  // (rather than summing individually-rounded scraps) is what guarantees
+  // the split still adds up to the cent — rounding each scrap on its own
+  // silently destroys sub-cent dust.
+  const cleaned = result.allocations.map(a=>
+    a.goalId === rc.goalId
+      ? { goalId:a.goalId, amount:a.amount }
+      : { goalId:a.goalId, amount:Math.floor(a.amount) }
+  );
   const newUnallocated = Math.floor(result.unallocated);
+  const allocatedElsewhere = cleaned.reduce((s,a)=> s + (a.goalId===rc.goalId ? 0 : a.amount), 0);
+
+  let sweepAmount = round2(amount - allocatedElsewhere - newUnallocated);
+
+  // Never push the sweep bucket past its own target — anything beyond its
+  // remaining room stays free cash instead.
+  let overflowBack = 0;
+  const room = goalRoom(target);
+  if(sweepAmount > room){
+    overflowBack = round2(sweepAmount - room);
+    sweepAmount = round2(room);
+  }
+  if(sweepAmount < 0){ overflowBack = round2(overflowBack + sweepAmount); sweepAmount = 0; }
 
   const existing = cleaned.find(a=>a.goalId===rc.goalId);
-  if(existing) existing.amount = round2(existing.amount + swept);
-  else cleaned.push({ goalId: rc.goalId, amount: round2(swept) });
+  if(existing) existing.amount = sweepAmount;
+  else cleaned.push({ goalId: rc.goalId, amount: sweepAmount });
 
-  return { allocations: cleaned, unallocated: round2(newUnallocated) };
+  return { allocations: cleaned, unallocated: round2(newUnallocated + overflowBack) };
 }
 
 /* Commits a shift: runs the engine, writes goal.current increments,
@@ -1046,7 +1062,12 @@ function commitShift({amount, hours, rate, tips, note, dateISO, silent}){
     createdAt: Date.now()
   };
   state.shifts.push(shift);
-  state.shifts.sort((a,b)=> new Date(b.dateISO) - new Date(a.dateISO));
+  // Two shifts logged for the same day carry the same dateISO, so date
+  // alone leaves ties in arbitrary order — break them by entry time so
+  // "last shift" is always the one most recently entered.
+  state.shifts.sort((a,b)=>
+    (new Date(b.dateISO) - new Date(a.dateISO)) || ((b.createdAt||0) - (a.createdAt||0))
+  );
 
   const newlyCompleted = state.goals.filter(g=>
     isGoalComplete(g) && before.has(g.id) && before.get(g.id) < g.target - 0.005
@@ -2152,7 +2173,7 @@ function showEnvBanner(){ document.getElementById('envBanner').classList.add('sh
    (switches tabs, opens the real sheets) rather than just pointing at
    static screenshots, then spotlights whatever it just opened.
    ===================================================================== */
-const TOUR_STEPS = [
+var TOUR_STEPS = [
   { enter: async ()=>{ closeAllSheets(); switchTab('home'); },
     selector:'.balance-hero', title:'Your total balance',
     text:'Everything you\'ve earned lives here — both what\'s stashed in buckets and what\'s still free to spend.' },
@@ -2192,8 +2213,20 @@ async function goToTourStep(i){
   const step = TOUR_STEPS[i];
   try{ await step.enter(); }catch(e){ /* keep the tour resilient even if a step's action fails */ }
   await tourWait(380);
+  await scrollTargetIntoView(step.selector);
   positionSpotlight(step.selector);
   renderTourCard(step, i);
+}
+
+/* On a phone most tour targets sit below the fold. Without this the
+   spotlight lands off-screen and the user just sees a dimmed, empty
+   page — so scroll the target to the middle before measuring it. */
+async function scrollTargetIntoView(selector){
+  const el = selector ? document.querySelector(selector) : null;
+  if(!el || typeof el.scrollIntoView !== 'function') return;
+  try{ el.scrollIntoView({block:'center', inline:'nearest', behavior:'smooth'}); }
+  catch(e){ try{ el.scrollIntoView(); }catch(e2){ /* ignore */ } }
+  await tourWait(430); // let the smooth scroll settle before measuring
 }
 function positionSpotlight(selector){
   const hole = document.getElementById('tourHole');
@@ -2224,13 +2257,27 @@ function renderTourCard(step, i){
         <button class="btn btn-primary btn-sm" data-action="tourNext">${i===TOUR_STEPS.length-1?'Done':'Next'}</button>
       </div>
     </div>`;
-  // place below the spotlighted element if there's room, else above, else centered
-  const cardH = 168;
+  // Measure the card for real rather than assuming a fixed height — the
+  // copy length varies per step, and a guessed height is what pushed the
+  // card off the bottom of the screen and under the tab bar.
+  const cardH = card.offsetHeight || 180;
+  const tabBar = document.getElementById('tabbar');
+  const tabH = tabBar ? tabBar.offsetHeight : 76;
+  const topLimit = 12;
+  const bottomLimit = vh - tabH - 12; // never sit beneath the tab bar
+  const gap = 14;
+
   let top;
-  if(!r){ top = vh/2 - cardH/2; }
-  else if(r.bottom + cardH + 24 < vh){ top = r.bottom + 16; }
-  else if(r.top - cardH - 24 > 0){ top = r.top - cardH - 16; }
-  else { top = Math.max(16, vh - cardH - 24); }
+  if(!r){
+    top = (vh - cardH)/2;                    // no target: centre it
+  } else if(r.bottom + gap + cardH <= bottomLimit){
+    top = r.bottom + gap;                    // below the highlighted element
+  } else if(r.top - gap - cardH >= topLimit){
+    top = r.top - gap - cardH;               // above it
+  } else {
+    top = bottomLimit - cardH;               // last resort: park above the tab bar
+  }
+  top = Math.max(topLimit, Math.min(top, bottomLimit - cardH));
   card.style.top = top+'px';
   card.style.left = '22px';
 }
