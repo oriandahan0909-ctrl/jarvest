@@ -3,7 +3,7 @@
    appear "stuck". This always tries the network first so a fresh build is
    picked up as soon as there's a connection, and falls back to the last
    good cached copy when offline. */
-const CACHE = 'jarvest-v3';
+const CACHE = 'jarvest-v4';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
